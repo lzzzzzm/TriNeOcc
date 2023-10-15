@@ -61,6 +61,7 @@ class TPVFormer(Base3DSegmentor):
         tpv_queries = self.encoder(img_feats, batch_data_samples)
         seg_logits = self.decode_head.predict(tpv_queries, batch_data_samples)
         seg_preds = [seg_logit.argmax(dim=1) for seg_logit in seg_logits]
+
         for i in range(len(seg_preds)):
             seg_logit = seg_logits[i]
             seg_pred = seg_preds[i]

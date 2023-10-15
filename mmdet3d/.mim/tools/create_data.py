@@ -83,8 +83,8 @@ def nuscenes_data_prep(root_path,
     info_val_path = osp.join(out_dir, f'{info_prefix}_infos_val.pkl')
     update_pkl_infos('nuscenes', out_dir=out_dir, pkl_path=info_train_path)
     update_pkl_infos('nuscenes', out_dir=out_dir, pkl_path=info_val_path)
-    create_groundtruth_database(dataset_name, root_path, info_prefix,
-                                f'{info_prefix}_infos_train.pkl')
+    # create_groundtruth_database(dataset_name, root_path, info_prefix,
+    #                             f'{info_prefix}_infos_train.pkl')
 
 
 def lyft_data_prep(root_path, info_prefix, version, max_sweeps=10):

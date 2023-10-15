@@ -117,53 +117,6 @@ class BEVLoadMultiViewImageFromFiles(LoadMultiViewImageFromFiles):
         results['num_ref_frames'] = self.num_ref_frames
         return results
 
-@TRANSFORMS.register_module()
-class ResizeMultiViewImageFromFiles(BaseTransform):
-    """Load multi channel images from a list of separate channel files.
-
-    ``BEVLoadMultiViewImageFromFiles`` adds the following keys for the
-    convenience of view transforms in the forward:
-        - 'cam2lidar'
-        - 'lidar2img'
-
-    Args:
-        to_float32 (bool): Whether to convert the img to float32.
-            Defaults to False.
-        color_type (str): Color type of the file. Defaults to 'unchanged'.
-        backend_args (dict, optional): Arguments to instantiate the
-            corresponding backend. Defaults to None.
-        num_views (int): Number of view in a frame. Defaults to 5.
-        num_ref_frames (int): Number of frame in loading. Defaults to -1.
-        test_mode (bool): Whether is test mode in loading. Defaults to False.
-        set_default_scale (bool): Whether to set default scale.
-            Defaults to True.
-    """
-
-    def transform(self, results: dict) -> Optional[dict]:
-        """Call function to load multi-view image from files.
-
-        Args:
-            results (dict): Result dict containing multi-view image filenames.
-
-        Returns:
-            dict: The result dict containing the multi-view image data.
-            Added keys and values are described below.
-
-                - filename (str): Multi-view image filenames.
-                - img (np.ndarray): Multi-view image arrays.
-                - img_shape (tuple[int]): Shape of multi-view image arrays.
-                - ori_shape (tuple[int]): Shape of original image arrays.
-                - pad_shape (tuple[int]): Shape of padded image arrays.
-                - scale_factor (float): Scale factor.
-                - img_norm_cfg (dict): Normalization configuration of images.
-        """
-
-        imgs = results['img']
-        reszie_imgs = [mmcv.imresize(img, size=(256, 256)) for img in imgs]
-        results['img'] = reszie_imgs
-        results['img_shape'] = reszie_imgs[0].shape[:2]
-        return results
-
 
 @TRANSFORMS.register_module()
 class SegLabelMapping(BaseTransform):

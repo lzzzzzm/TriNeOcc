@@ -34,7 +34,7 @@ def parse_args():
         '--task',
         type=str,
         choices=[
-            'mono_det', 'multi-view_det', 'lidar_det', 'lidar_seg',
+            'mono_det', 'multi-view_det', 'lidar_det', 'lidar_seg', 'occ_seg',
             'multi-modality_det'
         ],
         help='Determine the visualization method depending on the task.')
@@ -79,7 +79,7 @@ def trigger_visualization_hook(cfg, args):
         if args.show_dir:
             visualization_hook['test_out_dir'] = args.show_dir
         all_task_choices = [
-            'mono_det', 'multi-view_det', 'lidar_det', 'lidar_seg',
+            'mono_det', 'multi-view_det', 'lidar_det', 'lidar_seg', 'occ_seg',
             'multi-modality_det'
         ]
         assert args.task in all_task_choices, 'You must set '\

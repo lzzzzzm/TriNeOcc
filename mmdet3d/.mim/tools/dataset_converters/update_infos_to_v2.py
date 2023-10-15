@@ -23,6 +23,7 @@ from mmdet3d.datasets.convert_utils import (convert_annos,
                                             get_nuscenes_2d_boxes)
 from mmdet3d.datasets.utils import convert_quaternion_to_matrix
 from mmdet3d.structures import points_cam2img
+from nuscenes.utils.geometry_utils import transform_matrix
 
 
 def get_empty_instance():
@@ -180,7 +181,9 @@ def get_empty_standard_data_info(
         # (str, optional): Path of semantic labels for each point.
         pts_semantic_mask_path=None,
         # (str, optional): Path of instance labels for each point.
-        pts_instance_mask_path=None)
+        pts_instance_mask_path=None,
+        # (str, optional): Path of semantics occ labels for each scene
+        occ_semantics_path=None)
     return data_info
 
 
@@ -368,6 +371,9 @@ def update_nuscenes_infos(pkl_path, out_dir):
         if 'pts_semantic_mask_path' in ori_info_dict:
             temp_data_info['pts_semantic_mask_path'] = Path(
                 ori_info_dict['pts_semantic_mask_path']).name
+        if 'occ_semantics_path' in ori_info_dict:
+            temp_data_info['occ_semantics_path'] = ori_info_dict['occ_semantics_path']
+
         temp_data_info, _ = clear_data_info_unused_keys(temp_data_info)
         converted_list.append(temp_data_info)
     pkl_name = Path(pkl_path).name

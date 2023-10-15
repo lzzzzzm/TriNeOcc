@@ -271,6 +271,11 @@ def _fill_trainval_infos(nusc,
                 info['pts_semantic_mask_path'] = osp.join(
                     nusc.dataroot,
                     nusc.get('lidarseg', lidar_token)['filename'])
+            # add for occ
+            scene = nusc.get('scene', sample['scene_token'])
+            info['occ_semantics_path'] = osp.join(
+                nusc.dataroot, 'gts', scene['name'], sample['token'], 'labels.npz'
+            )
 
         if sample['scene_token'] in train_scenes:
             train_nusc_infos.append(info)

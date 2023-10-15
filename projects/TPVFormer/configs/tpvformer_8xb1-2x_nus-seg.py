@@ -71,7 +71,7 @@ val_pipeline = [
     dict(
         type='Pack3DDetInputs',
         keys=['img', 'points', 'pts_semantic_mask'],
-        meta_keys=['lidar2img', 'lidar_path', 'num_pts_feats'])
+        meta_keys=['lidar2img'])
 ]
 
 test_pipeline = val_pipeline
@@ -258,7 +258,7 @@ model = dict(
         stage_with_dcn=(False, False, True, True),
         init_cfg=dict(
             type='Pretrained',
-            checkpoint='ckpts/tpvformer_pretrained_fcos3d_r101_dcn.pth',
+            checkpoint='checkpoints/tpvformer_pretrained_fcos3d_r101_dcn.pth',
             prefix='backbone.')),
     neck=dict(
         type='mmdet.FPN',
@@ -270,7 +270,7 @@ model = dict(
         relu_before_extra_convs=True,
         init_cfg=dict(
             type='Pretrained',
-            checkpoint='ckpts/tpvformer_pretrained_fcos3d_r101_dcn.pth',
+            checkpoint='checkpoints/tpvformer_pretrained_fcos3d_r101_dcn.pth',
             prefix='neck.')),
     encoder=dict(
         type='TPVFormerEncoder',
