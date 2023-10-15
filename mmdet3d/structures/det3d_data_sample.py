@@ -186,49 +186,25 @@ class Det3DDataSample(DetDataSample):
     def gt_pts_seg(self) -> PointData:
         return self._gt_pts_seg
 
-    @property
-    def gt_occ_seg(self) -> PointData:
-        return self._gt_occ_seg
-
     @gt_pts_seg.setter
     def gt_pts_seg(self, value: PointData) -> None:
         self.set_field(value, '_gt_pts_seg', dtype=PointData)
-
-    @gt_occ_seg.setter
-    def gt_occ_seg(self, value: PointData) -> None:
-        self.set_field(value, '_gt_occ_seg', dtype=PointData)
 
     @gt_pts_seg.deleter
     def gt_pts_seg(self) -> None:
         del self._gt_pts_seg
 
-    @gt_occ_seg.deleter
-    def gt_occ_seg(self) -> None:
-        del self._gt_occ_seg
-
     @property
     def pred_pts_seg(self) -> PointData:
         return self._pred_pts_seg
-
-    @property
-    def pred_occ_seg(self) -> PointData:
-        return self._pred_occ_seg
 
     @pred_pts_seg.setter
     def pred_pts_seg(self, value: PointData) -> None:
         self.set_field(value, '_pred_pts_seg', dtype=PointData)
 
-    @pred_occ_seg.setter
-    def pred_occ_seg(self, value: PointData) -> None:
-        self.set_field(value, '_pred_occ_seg', dtype=PointData)
-
     @pred_pts_seg.deleter
     def pred_pts_seg(self) -> None:
         del self._pred_pts_seg
-
-    @pred_occ_seg.deleter
-    def pred_occ_seg(self) -> None:
-        del self._pred_occ_seg
 
 
 SampleList = List[Det3DDataSample]

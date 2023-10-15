@@ -61,10 +61,6 @@ class Pack3DDetInputs(BaseTransform):
         'gt_semantic_seg'
     ]
 
-    OCC_KEYS = [
-        'occ_semantics', 'occ_mask_lidar', 'occ_mask_camera'
-    ]
-
     def __init__(
         self,
         keys: tuple,
@@ -177,8 +173,7 @@ class Pack3DDetInputs(BaseTransform):
         for key in [
                 'proposals', 'gt_bboxes', 'gt_bboxes_ignore', 'gt_labels',
                 'gt_bboxes_labels', 'attr_labels', 'pts_instance_mask',
-                'pts_semantic_mask', 'centers_2d', 'depths', 'gt_labels_3d',
-                'occ_semantics', 'occ_mask_lidar', 'occ_mask_camera'
+                'pts_semantic_mask', 'centers_2d', 'depths', 'gt_labels_3d'
         ]:
             if key not in results:
                 continue
@@ -193,18 +188,6 @@ class Pack3DDetInputs(BaseTransform):
         if 'gt_semantic_seg' in results:
             results['gt_semantic_seg'] = to_tensor(
                 results['gt_semantic_seg'][None])
-        # if 'occ_semantics' in results:
-        #     results['occ_semantics'] = to_tensor(
-        #         results['occ_semantics'][None]
-        #     )
-        # if 'occ_mask_lidar' in results:
-        #     results['occ_mask_lidar'] = to_tensor(
-        #         results['occ_mask_lidar'][None]
-        #     )
-        # if 'occ_mask_camera' in results:
-        #     results['occ_mask_camera'] = to_tensor(
-        #         results['occ_mask_camera'][None]
-        #     )
         if 'gt_seg_map' in results:
             results['gt_seg_map'] = results['gt_seg_map'][None, ...]
 
@@ -212,16 +195,11 @@ class Pack3DDetInputs(BaseTransform):
         gt_instances_3d = InstanceData()
         gt_instances = InstanceData()
         gt_pts_seg = PointData()
-        gt_occ_seg = PointData()
 
         data_metas = {}
         for key in self.meta_keys:
             if key in results:
                 data_metas[key] = results[key]
-            elif 'lidar_points' in results:
-                if key in results['lidar_points']:
-                    data_metas[key] = results['lidar_points'][key]
-
             elif 'images' in results:
                 if len(results['images'].keys()) == 1:
                     cam_type = list(results['images'].keys())[0]
@@ -237,6 +215,9 @@ class Pack3DDetInputs(BaseTransform):
                             img_metas.append(results['images'][cam_type][key])
                     if len(img_metas) > 0:
                         data_metas[key] = img_metas
+            elif 'lidar_points' in results:
+                if key in results['lidar_points']:
+                    data_metas[key] = results['lidar_points'][key]
         data_sample.set_metainfo(data_metas)
 
         inputs = {}
@@ -253,8 +234,6 @@ class Pack3DDetInputs(BaseTransform):
                         gt_instances[self._remove_prefix(key)] = results[key]
                 elif key in self.SEG_KEYS:
                     gt_pts_seg[self._remove_prefix(key)] = results[key]
-                elif key in self.OCC_KEYS:
-                    gt_occ_seg[self._remove_prefix(key)] = results[key]
                 else:
                     raise NotImplementedError(f'Please modified '
                                               f'`Pack3DDetInputs` '
@@ -264,7 +243,6 @@ class Pack3DDetInputs(BaseTransform):
         data_sample.gt_instances_3d = gt_instances_3d
         data_sample.gt_instances = gt_instances
         data_sample.gt_pts_seg = gt_pts_seg
-        data_sample.gt_occ_seg = gt_occ_seg
         if 'eval_ann_info' in results:
             data_sample.eval_ann_info = results['eval_ann_info']
         else:
