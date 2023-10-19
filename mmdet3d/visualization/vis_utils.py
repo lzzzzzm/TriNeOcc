@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import copy
+import math
 from typing import Tuple
 
 import numpy as np
@@ -9,6 +10,64 @@ import trimesh
 from mmdet3d.structures import (BaseInstance3DBoxes, Box3DMode,
                                 CameraInstance3DBoxes, Coord3DMode,
                                 DepthInstance3DBoxes, LiDARInstance3DBoxes)
+
+def voxel2points(voxel, voxelSize=(0.4, 0.4, 0.4), range=[-40.0, -40.0, -1.0, 40.0, 40.0, 5.4], ignore_labels=[17, 0]):
+    if isinstance(voxel, np.ndarray): voxel = torch.from_numpy(voxel)
+    mask = torch.zeros_like(voxel, dtype=torch.bool)
+    for ignore_label in ignore_labels:
+        mask = torch.logical_or(voxel == ignore_label, mask)
+    mask = torch.logical_not(mask)
+    occIdx = torch.where(mask)
+    points = torch.cat((occIdx[0][:, None] * voxelSize[0] + voxelSize[0] / 2 + range[0], \
+                        occIdx[1][:, None] * voxelSize[1] + voxelSize[1] / 2 + range[1], \
+                        occIdx[2][:, None] * voxelSize[2] + voxelSize[2] / 2 + range[2]), dim=1)
+    return points, voxel[occIdx]
+
+def voxel_profile(voxel, voxel_size=(0.4, 0.4, 0.4)):
+    centers = torch.cat((voxel[:, :2], voxel[:, 2][:, None] - voxel_size[2] / 2), dim=1)
+    # centers = voxel
+    wlh = torch.cat((torch.tensor(voxel_size[0]).repeat(centers.shape[0])[:, None],
+                          torch.tensor(voxel_size[1]).repeat(centers.shape[0])[:, None],
+                          torch.tensor(voxel_size[2]).repeat(centers.shape[0])[:, None]), dim=1)
+    yaw = torch.full_like(centers[:, 0:1], 0)
+    return torch.cat((centers, wlh, yaw), dim=1)
+
+def generate_the_ego_car():
+    ego_range = [-2, -1, 0, 2, 1, 1.5]
+    ego_voxel_size=[0.1, 0.1, 0.1]
+    ego_xdim = int((ego_range[3] - ego_range[0]) / ego_voxel_size[0])
+    ego_ydim = int((ego_range[4] - ego_range[1]) / ego_voxel_size[1])
+    ego_zdim = int((ego_range[5] - ego_range[2]) / ego_voxel_size[2])
+    ego_voxel_num = ego_xdim * ego_ydim * ego_zdim
+    temp_x = np.arange(ego_xdim)
+    temp_y = np.arange(ego_ydim)
+    temp_z = np.arange(ego_zdim)
+    ego_xyz = np.stack(np.meshgrid(temp_y, temp_x, temp_z), axis=-1).reshape(-1, 3)
+    ego_point_x = (ego_xyz[:, 0:1] + 0.5) / ego_xdim * (ego_range[3] - ego_range[0]) + ego_range[0]
+    ego_point_y = (ego_xyz[:, 1:2] + 0.5) / ego_ydim * (ego_range[4] - ego_range[1]) + ego_range[1]
+    ego_point_z = (ego_xyz[:, 2:3] + 0.5) / ego_zdim * (ego_range[5] - ego_range[2]) + ego_range[2]
+    ego_point_xyz = np.concatenate((ego_point_y, ego_point_x, ego_point_z), axis=-1)
+    ego_points_label =  (np.ones((ego_point_xyz.shape[0]))*16).astype(np.uint8)
+    ego_dict = {}
+    ego_dict['point'] = ego_point_xyz
+    ego_dict['label'] = ego_points_label
+    return ego_point_xyz
+
+def my_compute_box_3d(center, size, heading_angle):
+    h, w, l = size[:, 2], size[:, 0], size[:, 1]
+    heading_angle = -heading_angle - math.pi / 2
+    center[:, 2] = center[:, 2] + h / 2
+    #R = rotz(1 * heading_angle)
+    l, w, h = (l / 2).unsqueeze(1), (w / 2).unsqueeze(1), (h / 2).unsqueeze(1)
+    x_corners = torch.cat([-l, l, l, -l, -l, l, l, -l], dim=1)[..., None]
+    y_corners = torch.cat([w, w, -w, -w, w, w, -w, -w], dim=1)[..., None]
+    z_corners = torch.cat([h, h, h, h, -h, -h, -h, -h], dim=1)[..., None]
+    #corners_3d = R @ torch.vstack([x_corners, y_corners, z_corners])
+    corners_3d = torch.cat([x_corners, y_corners, z_corners], dim=2)
+    corners_3d[..., 0] += center[:, 0:1]
+    corners_3d[..., 1] += center[:, 1:2]
+    corners_3d[..., 2] += center[:, 2:3]
+    return corners_3d
 
 
 def write_obj(points: np.ndarray, out_filename: str) -> None:

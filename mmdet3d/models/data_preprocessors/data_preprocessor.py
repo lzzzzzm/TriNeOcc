@@ -205,6 +205,9 @@ class Det3DDataPreprocessor(DetDataPreprocessor):
                     imgs, data_samples = batch_aug(imgs, data_samples)
             batch_inputs['imgs'] = imgs
 
+        if 'rays_bundle' in inputs:
+            batch_inputs['rays_bundle'] = torch.stack(inputs['rays_bundle'])
+
         return {'inputs': batch_inputs, 'data_samples': data_samples}
 
     def preprocess_img(self, _batch_img: Tensor) -> Tensor:

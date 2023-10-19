@@ -122,15 +122,16 @@ class OccMetric(BaseMetric):
         gt_semantic_masks = []
         pred_semantic_masks = []
         for eval_ann, sinlge_pred_results in results:
+            occ_pred_results = sinlge_pred_results['pts_semantic_occ'].flatten()
+
             occ_semantics = eval_ann['occ_semantics'].astype(int).flatten()
             occ_mask_camera = eval_ann['occ_mask_camera'].astype(bool).flatten()
             not_occ_mask_camera = np.bitwise_not(occ_mask_camera)
             occ_semantics[not_occ_mask_camera] = -1
-            sinlge_pred_results['pts_semantic_occ'][not_occ_mask_camera] = -1
+            occ_pred_results[not_occ_mask_camera] = -1
 
             gt_semantic_masks.append(occ_semantics)
-            pred_semantic_masks.append(
-                sinlge_pred_results['pts_semantic_occ'])
+            pred_semantic_masks.append(occ_pred_results)
 
         ret_dict = seg_eval(
             gt_semantic_masks,

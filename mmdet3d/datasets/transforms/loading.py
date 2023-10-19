@@ -835,6 +835,7 @@ class LoadAnnotations3D(LoadAnnotations):
                  with_attr_label: bool = False,
                  with_mask_3d: bool = False,
                  with_seg_3d: bool = False,
+                 with_occ_3d: bool =False,
                  with_bbox: bool = False,
                  with_label: bool = False,
                  with_mask: bool = False,
@@ -859,6 +860,7 @@ class LoadAnnotations3D(LoadAnnotations):
         self.with_attr_label = with_attr_label
         self.with_mask_3d = with_mask_3d
         self.with_seg_3d = with_seg_3d
+        self.with_occ_3d = with_occ_3d
         self.with_panoptic_3d = with_panoptic_3d
         self.seg_3d_dtype = eval(seg_3d_dtype)
         self.seg_offset = seg_offset
@@ -977,6 +979,25 @@ class LoadAnnotations3D(LoadAnnotations):
             results['eval_ann_info']['pts_semantic_mask'] = pts_semantic_mask
         return results
 
+    def _load_semantic_occ_3d(self, results: dict)-> dict:
+        semantics_occ_path = results['occ_semantics_path']
+        semantics_occ = np.load(semantics_occ_path)
+        occ_labels = semantics_occ['semantics']
+        mask_lidar = semantics_occ['mask_lidar']
+        mask_camera = semantics_occ['mask_camera']
+
+        results['occ_semantics'] = occ_labels
+        results['occ_mask_lidar'] = mask_lidar
+        results['occ_mask_camera'] = mask_camera
+
+        # 'eval_ann_info' will be passed to evaluator
+        if 'eval_ann_info' in results:
+            results['eval_ann_info']['occ_semantics'] = occ_labels
+            results['eval_ann_info']['occ_mask_lidar'] = mask_lidar
+            results['eval_ann_info']['occ_mask_camera'] = mask_camera
+
+        return results
+
     def _load_panoptic_3d(self, results: dict) -> dict:
         """Private function to load 3D panoptic segmentation annotations.
 
@@ -1068,6 +1089,8 @@ class LoadAnnotations3D(LoadAnnotations):
             results = self._load_masks_3d(results)
         if self.with_seg_3d:
             results = self._load_semantic_seg_3d(results)
+        if self.with_occ_3d:
+            results = self._load_semantic_occ_3d(results)
         return results
 
     def __repr__(self) -> str:

@@ -19,6 +19,7 @@ from mmengine.visualization import Visualizer as MMENGINE_Visualizer
 from mmengine.visualization.utils import (check_type, color_val_matplotlib,
                                           tensor2ndarray)
 from torch import Tensor
+import torch
 
 from mmdet3d.registry import VISUALIZERS
 from mmdet3d.structures import (BaseInstance3DBoxes, Box3DMode,
@@ -27,7 +28,7 @@ from mmdet3d.structures import (BaseInstance3DBoxes, Box3DMode,
                                 Det3DDataSample, LiDARInstance3DBoxes,
                                 PointData, points_cam2img)
 from .vis_utils import (proj_camera_bbox3d_to_img, proj_depth_bbox3d_to_img,
-                        proj_lidar_bbox3d_to_img, to_depth_mode)
+                        proj_lidar_bbox3d_to_img, to_depth_mode, voxel2points, voxel_profile, generate_the_ego_car, my_compute_box_3d)
 
 try:
     import open3d as o3d
@@ -252,6 +253,63 @@ class Det3DLocalVisualizer(DetLocalVisualizer):
         self.o3d_vis.add_geometry(mesh_frame)
 
         pcd.colors = o3d.utility.Vector3dVector(points_colors)
+        self.o3d_vis.add_geometry(pcd)
+        self.pcd = pcd
+        self.points_colors = points_colors
+
+    def voxellizer_points(self,
+                          points,
+                          ego_points,
+                          bbox_corners,
+                          linesets,
+                          voxel_size=0.4,
+                          frame_cfg: dict = dict(size=1, origin=[0, 0, 0]),
+                          pcd_mode=0,
+                          vis_mode='replace',
+                          points_size=2,
+                          mode='xyzrgb',
+                          points_color: Tuple[float] = (0.8, 0.8, 0.8),
+                          ):
+        if not hasattr(self, 'o3d_vis'):
+            self.o3d_vis = self._initialize_o3d_vis()
+
+        if hasattr(self, 'pcd') and vis_mode != 'add':
+            self.o3d_vis.remove_geometry(self.pcd)
+            # set points size in Open3D
+        render_option = self.o3d_vis.get_render_option()
+        if render_option is not None:
+            render_option.point_size = points_size
+            render_option.background_color = np.asarray([255, 255, 255])
+
+        points = points.copy()
+        pcd = geometry.PointCloud()
+        if mode == 'xyz':
+            pcd.points = o3d.utility.Vector3dVector(points[:, :3])
+            points_colors = np.tile(
+                np.array(points_color), (points.shape[0], 1))
+        elif mode == 'xyzrgb':
+            pcd.points = o3d.utility.Vector3dVector(points[:, :3])
+            points_colors = points[:, 3:6]
+            # normalize to [0, 1] for Open3D drawing
+            if not ((points_colors >= 0.0) & (points_colors <= 1.0)).all():
+                points_colors /= 255.0
+        else:
+            raise NotImplementedError
+        pcd.colors = o3d.utility.Vector3dVector(points_colors)
+
+        voxelGrid = o3d.geometry.VoxelGrid.create_from_point_cloud(pcd, voxel_size=voxel_size)
+        self.o3d_vis.add_geometry(voxelGrid)
+
+        line_sets = o3d.geometry.LineSet()
+        line_sets.points = o3d.open3d.utility.Vector3dVector(bbox_corners.reshape((-1, 3)))
+        line_sets.lines = o3d.open3d.utility.Vector2iVector(linesets.reshape((-1, 2)))
+        line_sets.paint_uniform_color((0, 0, 0))
+        self.o3d_vis.add_geometry(line_sets)
+        # create coordinate frame
+        mesh_frame = geometry.TriangleMesh.create_coordinate_frame(**frame_cfg)
+        self.o3d_vis.add_geometry(mesh_frame)
+
+        # update pcd
         self.o3d_vis.add_geometry(pcd)
         self.pcd = pcd
         self.points_colors = points_colors
@@ -773,6 +831,30 @@ class Det3DLocalVisualizer(DetLocalVisualizer):
 
         self.draw_seg_mask(seg_color)
 
+    def _draw_occ_sem_seg(self,
+                          occ_seg,
+                          palette: Optional[List[tuple]] = None,
+                          keep_index: Optional[int] = None)-> None:
+        palette = np.array(palette)
+        palette = palette[:, :3] / 255
+        points, occ_voxel = voxel2points(occ_seg)
+        points = points.numpy()
+        occ_voxel = occ_voxel.numpy()
+        pts_color = palette[occ_voxel.astype(int) % len(palette)]
+        seg_color = np.concatenate([points[:, :3], pts_color], axis=1)
+        ego_points = generate_the_ego_car()
+
+        bboxes = voxel_profile(torch.tensor(points))
+        bboxes_corners = my_compute_box_3d(bboxes[:, 0:3], bboxes[:, 3:6], bboxes[:, 6:7])
+        bases_ = torch.arange(0, bboxes_corners.shape[0] * 8, 8)
+        edges = torch.tensor([[0, 1], [1, 2], [2, 3], [3, 0], [4, 5], [5, 6], [6, 7], [7, 4], [0, 4], [1, 5], [2, 6],
+                              [3, 7]])  # lines along y-axis
+        edges = edges.reshape((1, 12, 2)).repeat(bboxes_corners.shape[0], 1, 1)
+        edges = edges + bases_[:, None, None]
+
+        self.voxellizer_points(points=seg_color, ego_points=ego_points, bbox_corners=bboxes_corners.numpy(), linesets=edges.numpy(), mode='xyzrgb')
+
+
     @master_only
     def show(self,
              save_path: Optional[str] = None,
@@ -970,7 +1052,7 @@ class Det3DLocalVisualizer(DetLocalVisualizer):
                 False.
         """
         assert vis_task in (
-            'mono_det', 'multi-view_det', 'lidar_det', 'lidar_seg',
+            'mono_det', 'multi-view_det', 'lidar_det', 'lidar_seg','occ_seg',
             'multi-modality_det'), f'got unexpected vis_task {vis_task}.'
         classes = self.dataset_meta.get('classes', None)
         # For object detection datasets, no palette is saved
@@ -1042,6 +1124,15 @@ class Det3DLocalVisualizer(DetLocalVisualizer):
                 self._draw_pts_sem_seg(data_input['points'],
                                        data_sample.pred_pts_seg, palette,
                                        keep_index)
+            if 'pred_occ_seg' in data_sample and vis_task == 'occ_seg':
+                assert classes is not None, 'class information is ' \
+                                            'not provided when ' \
+                                            'visualizing semantic ' \
+                                            'segmentation results.'
+                self._draw_occ_sem_seg(data_sample.gt_occ_seg.occ_semantics,
+                                       palette,
+                                       keep_index)
+
 
         # monocular 3d object detection image
         if vis_task in ['mono_det', 'multi-modality_det']:

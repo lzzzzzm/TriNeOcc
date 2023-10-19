@@ -47,7 +47,7 @@ def to_tensor(
 
 @TRANSFORMS.register_module()
 class Pack3DDetInputs(BaseTransform):
-    INPUTS_KEYS = ['points', 'img']
+    INPUTS_KEYS = ['points', 'img', 'rays_bundle']
     INSTANCEDATA_3D_KEYS = [
         'gt_bboxes_3d', 'gt_labels_3d', 'attr_labels', 'depths', 'centers_2d'
     ]
@@ -61,6 +61,13 @@ class Pack3DDetInputs(BaseTransform):
         'gt_semantic_seg'
     ]
 
+    OCC_KEYS = [
+        'occ_semantics', 'occ_mask_lidar', 'occ_mask_camera'
+    ]
+
+    MAPS_KEYS=[
+        'depth_maps', 'semantics_maps'
+    ]
     def __init__(
         self,
         keys: tuple,
@@ -76,7 +83,8 @@ class Pack3DDetInputs(BaseTransform):
                             'cam2global', 'crop_offset', 'img_crop_offset',
                             'resize_img_shape', 'lidar2cam', 'ori_lidar2img',
                             'num_ref_frames', 'num_views', 'ego2global',
-                            'axis_align_matrix')
+                            'axis_align_matrix',
+                            'rays_bundle')
     ) -> None:
         self.keys = keys
         self.meta_keys = meta_keys
@@ -173,7 +181,9 @@ class Pack3DDetInputs(BaseTransform):
         for key in [
                 'proposals', 'gt_bboxes', 'gt_bboxes_ignore', 'gt_labels',
                 'gt_bboxes_labels', 'attr_labels', 'pts_instance_mask',
-                'pts_semantic_mask', 'centers_2d', 'depths', 'gt_labels_3d'
+                'pts_semantic_mask', 'centers_2d', 'depths', 'gt_labels_3d',
+                'occ_semantics', 'occ_mask_lidar', 'occ_mask_camera',
+                'depth_maps', 'semantics_maps','rays_bundle'
         ]:
             if key not in results:
                 continue
@@ -188,18 +198,25 @@ class Pack3DDetInputs(BaseTransform):
         if 'gt_semantic_seg' in results:
             results['gt_semantic_seg'] = to_tensor(
                 results['gt_semantic_seg'][None])
+
         if 'gt_seg_map' in results:
             results['gt_seg_map'] = results['gt_seg_map'][None, ...]
 
         data_sample = Det3DDataSample()
         gt_instances_3d = InstanceData()
         gt_instances = InstanceData()
+        gt_maps = InstanceData()
         gt_pts_seg = PointData()
+        gt_occ_seg = PointData()
 
         data_metas = {}
         for key in self.meta_keys:
             if key in results:
                 data_metas[key] = results[key]
+            elif 'lidar_points' in results:
+                if key in results['lidar_points']:
+                    data_metas[key] = results['lidar_points'][key]
+
             elif 'images' in results:
                 if len(results['images'].keys()) == 1:
                     cam_type = list(results['images'].keys())[0]
@@ -215,9 +232,6 @@ class Pack3DDetInputs(BaseTransform):
                             img_metas.append(results['images'][cam_type][key])
                     if len(img_metas) > 0:
                         data_metas[key] = img_metas
-            elif 'lidar_points' in results:
-                if key in results['lidar_points']:
-                    data_metas[key] = results['lidar_points'][key]
         data_sample.set_metainfo(data_metas)
 
         inputs = {}
@@ -234,6 +248,10 @@ class Pack3DDetInputs(BaseTransform):
                         gt_instances[self._remove_prefix(key)] = results[key]
                 elif key in self.SEG_KEYS:
                     gt_pts_seg[self._remove_prefix(key)] = results[key]
+                elif key in self.OCC_KEYS:
+                    gt_occ_seg[self._remove_prefix(key)] = results[key]
+                elif key in self.MAPS_KEYS:
+                    gt_maps[key] = results[key]
                 else:
                     raise NotImplementedError(f'Please modified '
                                               f'`Pack3DDetInputs` '
@@ -243,6 +261,9 @@ class Pack3DDetInputs(BaseTransform):
         data_sample.gt_instances_3d = gt_instances_3d
         data_sample.gt_instances = gt_instances
         data_sample.gt_pts_seg = gt_pts_seg
+        data_sample.gt_occ_seg = gt_occ_seg
+        data_sample.gt_maps = gt_maps
+
         if 'eval_ann_info' in results:
             data_sample.eval_ann_info = results['eval_ann_info']
         else:
