@@ -183,7 +183,7 @@ class Pack3DDetInputs(BaseTransform):
                 'gt_bboxes_labels', 'attr_labels', 'pts_instance_mask',
                 'pts_semantic_mask', 'centers_2d', 'depths', 'gt_labels_3d',
                 'occ_semantics', 'occ_mask_lidar', 'occ_mask_camera',
-                'depth_maps', 'semantics_maps','rays_bundle'
+                'depth_maps', 'semantics_maps'
         ]:
             if key not in results:
                 continue

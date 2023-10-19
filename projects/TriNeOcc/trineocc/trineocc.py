@@ -51,7 +51,7 @@ class TriNeOcc(Base3DSegmentor):
              batch_data_samples: SampleList) -> SampleList:
         img_feats = self.extract_feat(batch_inputs['imgs'])
         queries = self.encoder(img_feats, batch_data_samples)
-        losses = self.decode_head.loss(queries, batch_data_samples)
+        losses = self.decode_head.loss(queries, batch_inputs['rays_bundle'], batch_data_samples)
         return losses
 
     def predict(self, batch_inputs: dict,

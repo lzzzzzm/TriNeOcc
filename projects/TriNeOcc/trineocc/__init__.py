@@ -6,9 +6,12 @@ from .loading import LoadRaysFromMultiViewImage, BEVOccLoadMultiViewImageFromFil
 from .trineocc import TriNeOcc
 from .tpvformer_occ_encoder import TPVFormerOccEncoder
 from .trineocc_head import TriNeOccHead
+# loss init
+from .silog_loss import SiLogLoss
 
 __all__ = [
     'NuScenesOccDataset',
     'LoadRaysFromMultiViewImage', 'BEVOccLoadMultiViewImageFromFiles', 'LoadDepthsFromPoints',
-    'TriNeOcc', 'TPVFormerOccEncoder', 'TriNeOccHead'
+    'TriNeOcc', 'TPVFormerOccEncoder', 'TriNeOccHead',
+    'SiLogLoss'
 ]

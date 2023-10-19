@@ -232,28 +232,26 @@ class LoadRaysFromMultiViewImage(BaseTransform):
 
     def get_rays_from_single_image(self, H, W, c2i, c2w, valid_index_x, valid_index_y):
         sample_index = np.random.randint(0, valid_index_x.shape[0], size=(self.select_rays_number, ))
+        c2w = torch.tensor(c2w)
+        x = torch.tensor(valid_index_x[sample_index])
+        y = torch.tensor(valid_index_y[sample_index])
 
-        x = valid_index_x[sample_index]
-        y = valid_index_y[sample_index]
-
-        camera_dirs = np.pad(
-            np.stack(
+        camera_dirs = F.pad(
+            torch.stack(
                 [
                     (x - c2i[0, 2] + 0.5) / c2i[0, 0],
-                    (y - c2i[1, 2] + 0.5)/  c2i[1, 1],
+                    (y - c2i[1, 2] + 0.5) / c2i[1, 1],
                 ],
-                axis=-1,
+                dim=-1,
             ),
             (0, 1),
-            constant_values=1.0,
+            value=1.0,
         )  # [num_rays, 3]
-        directions = np.sum(camera_dirs[:, None, :] * c2w[:3, :3], axis=-1)
-        origins = c2w[:3, 3].reshape((1, 3))
-        origins = np.tile(origins, (directions.shape[0], 1))  # (H*W, 3)
-        # viewdirs is the normalized directions
-        viewdirs = directions / np.linalg.norm(
-            directions, axis=-1, keepdims=True
-        )
+        directions = (camera_dirs[:, None, :] * c2w[:3, :3]).sum(dim=-1).to(torch.float32)
+        origins = torch.broadcast_to(c2w[:3, 3], directions.shape).to(torch.float32)
+        viewdirs = (directions / torch.linalg.norm(
+            directions, dim=-1, keepdims=True
+        )).to(torch.float32)
 
         return origins, directions, viewdirs, x, y
 
@@ -267,13 +265,13 @@ class LoadRaysFromMultiViewImage(BaseTransform):
             semantic_map = semantic_map[y, x]
             depth_map = depth_map[y, x]
 
-            rays = np.concatenate([origins, directions, viewdirs], -1)
+            rays = torch.cat([origins, directions, viewdirs], -1)
 
             depth_maps.append(depth_map)
             semantic_maps.append(semantic_map)
             rays_bundle.append(rays)
 
-        rays_bundle = np.stack(rays_bundle)
+        rays_bundle = torch.stack(rays_bundle)
         depth_maps = np.stack(depth_maps)
         semantic_maps = np.stack(semantic_maps)
 

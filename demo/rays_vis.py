@@ -83,27 +83,28 @@ def main():
     np.random.seed()
     sample_number = np.random.randint(0, len(nus_dataset))
     data = nus_dataset.prepare_data(sample_number)
+    points = data['inputs']['points']
     rays_bundle = data['inputs']['rays_bundle']
     occ_semantics = data['data_samples'].gt_occ_seg.occ_semantics
 
     vis = Det3DLocalVisualizer()
     device = 'cuda'
-    for index in range(6):
-        scene_aabb = torch.tensor([-40.0, -40.0, -1.0, 40.0, 40.0, 5.4], device=device)
-        origins, directions, viewdirs = rays_bundle[index][:, :3].cuda(), rays_bundle[index][:, 3:6].cuda(), rays_bundle[index][:, 6:].cuda()
-        ray_indices, t_starts, t_ends = nerfacc.ray_marching(origins, viewdirs, scene_aabb=scene_aabb, render_step_size=0.2, stratified=True)
-        t_mid = (t_starts + t_ends) / 2.0
-        sample_locs = origins[ray_indices] + t_mid * viewdirs[ray_indices]
-        vis.set_points(sample_locs.cpu().numpy(), vis_mode='add', pcd_mode=2)
+    # for index in range(6):
+    #     scene_aabb = torch.tensor([-40.0, -40.0, -1.0, 40.0, 40.0, 5.4], device=device, dtype=torch.float32)
+    #     origins, directions, viewdirs = rays_bundle[index][:, :3].cuda(), rays_bundle[index][:, 3:6].cuda(), rays_bundle[index][:, 6:].cuda()
+    #     ray_indices, t_starts, t_ends = nerfacc.ray_marching(origins, viewdirs, scene_aabb=scene_aabb, render_step_size=0.2, stratified=True)
+    #     t_mid = (t_starts + t_ends) / 2.0
+    #     sample_locs = origins[ray_indices] + t_mid * viewdirs[ray_indices]
+    #     vis.set_points(sample_locs.cpu().numpy(), vis_mode='add', pcd_mode=2)
     # vis bug
-    origins, directions, viewdirs = rays_bundle[5][:, :3].cuda(), rays_bundle[5][:, 3:6].cuda(), rays_bundle[5][:, 6:].cuda()
-    ray_indices, t_starts, t_ends = nerfacc.ray_marching(origins, viewdirs, scene_aabb=scene_aabb, render_step_size=0.2,
-                                                         stratified=True)
-    t_mid = (t_starts + t_ends) / 2.0
-    sample_locs = origins[ray_indices] + t_mid * viewdirs[ray_indices]
-    vis.set_points(sample_locs.cpu().numpy(), vis_mode='add', pcd_mode=2)
-
-    vis._draw_occ_sem_seg(occ_semantics, nus_dataset.METAINFO['palette'])
+    # origins, directions, viewdirs = rays_bundle[5][:, :3].cuda(), rays_bundle[5][:, 3:6].cuda(), rays_bundle[5][:, 6:].cuda()
+    # ray_indices, t_starts, t_ends = nerfacc.ray_marching(origins, viewdirs, scene_aabb=scene_aabb, render_step_size=0.2,
+    #                                                      stratified=True)
+    # t_mid = (t_starts + t_ends) / 2.0
+    # sample_locs = origins[ray_indices] + t_mid * viewdirs[ray_indices]
+    # vis.set_points(sample_locs.cpu().numpy(), vis_mode='add', pcd_mode=2)
+    vis.set_points(points.cpu().numpy(), vis_mode='add')
+    # vis._draw_occ_sem_seg(occ_semantics, nus_dataset.METAINFO['palette'])
     vis.show()
 
 

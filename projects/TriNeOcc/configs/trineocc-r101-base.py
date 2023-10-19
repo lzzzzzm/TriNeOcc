@@ -41,9 +41,15 @@ train_pipeline = [
         type='MultiViewWrapper',
         transforms=dict(type='PhotoMetricDistortion3D')),
     dict(type='SegLabelMapping'),
+    dict(type='LoadDepthsFromPoints',
+         depth_min=1.0,
+         depth_max=60.0),
+    dict(
+        type='LoadRaysFromMultiViewImage',
+        select_rays_number=512),
     dict(
         type='Pack3DDetInputs',
-        keys=['img', 'points', 'pts_semantic_mask'],
+        keys=['img', 'points', 'rays_bundle', 'depth_maps', 'semantics_maps'],
         meta_keys=['lidar2img', 'ego2lidar'])
 ]
 
@@ -68,9 +74,15 @@ val_pipeline = [
         with_attr_label=False,
         seg_3d_dtype='np.uint8'),
     dict(type='SegLabelMapping'),
+    dict(type='LoadDepthsFromPoints',
+             depth_min=1.0,
+             depth_max=60.0),
+    dict(
+        type='LoadRaysFromMultiViewImage',
+        select_rays_number=512),
     dict(
         type='Pack3DDetInputs',
-        keys=['img', 'points', 'pts_semantic_mask'],
+        keys=['img', 'points', 'rays_bundle', 'depth_maps', 'semantics_maps'],
         meta_keys=['lidar2img', 'ego2lidar'])
 ]
 
@@ -140,7 +152,7 @@ test_cfg = dict(type='TestLoop')
 
 default_hooks = dict(checkpoint=dict(type='CheckpointHook', interval=1))
 
-point_cloud_range = [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
+point_cloud_range = [-40.0, -40.0, -1.0, 40.0, 40.0, 5.4]
 _dim_ = 128
 num_heads = 8
 _ffn_dim_ = _dim_ * 2
@@ -298,20 +310,18 @@ model = dict(
         tpv_h=tpv_h_,
         tpv_w=tpv_w_,
         tpv_z=tpv_z_,
-        num_classes=17,
+        num_classes=18,
         in_dims=_dim_,
         hidden_dims=2 * _dim_,
         out_dims=_dim_,
         scale_h=scale_h,
         scale_w=scale_w,
         scale_z=scale_z,
-        loss_ce=dict(
+        loss_semantics=dict(
             type='mmdet.CrossEntropyLoss',
             use_sigmoid=False,
             class_weight=None,
             avg_non_ignore=True,
             loss_weight=1.0),
-        loss_lovasz=dict(type='LovaszLoss', loss_weight=1.0, reduction='none'),
-        lovasz_input='points',
-        ce_input='voxel',
+        loss_depth=dict(type='SiLogLoss', loss_weight=1.0, reduction='none'),
         ignore_index=0))

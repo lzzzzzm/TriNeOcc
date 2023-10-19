@@ -40,7 +40,7 @@ class TPVFormerDataPreprocessor(Det3DDataPreprocessor):
             coors = torch.floor(
                 (point_clamp - min_bound) /
                 point_clamp.new_tensor(self.voxel_layer.voxel_size)).int()
-            self.get_voxel_seg(coors, data_sample)
+            # self.get_voxel_seg(coors, data_sample)
             data_sample.point_coors = coors
 
     def get_voxel_seg(self, res_coors: Tensor, data_sample: SampleList):
