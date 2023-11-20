@@ -16,6 +16,17 @@ data_prefix = dict(
     CAM_BACK_LEFT='samples/CAM_BACK_LEFT')
 
 backend_args = None
+ida_aug_conf = {
+        "resize_lim": (0.8, 1.0),
+        "final_dim": (512, 1408),
+        "bot_pct_lim": (0.0, 0.0),
+        "rot_lim": (0.0, 0.0),
+        "H": 900,
+        "W": 1600,
+        # "rand_flip": False,
+        "rand_flip": False,
+    }
+
 
 train_pipeline = [
     dict(
@@ -40,6 +51,7 @@ train_pipeline = [
     dict(
         type='MultiViewWrapper',
         transforms=dict(type='PhotoMetricDistortion3D')),
+    dict(type='ResizeCropFlipImage', data_aug_conf=ida_aug_conf, training=True),
     dict(type='SegLabelMapping'),
     dict(type='LoadDepthsFromPoints',
          depth_min=1.0,
@@ -74,6 +86,7 @@ val_pipeline = [
         with_occ_3d=True,
         with_attr_label=False,
         seg_3d_dtype='np.uint8'),
+    dict(type='ResizeCropFlipImage', data_aug_conf=ida_aug_conf, training=False),
     dict(type='SegLabelMapping'),
     dict(type='LoadDepthsFromPoints',
              depth_min=1.0,
@@ -90,7 +103,7 @@ val_pipeline = [
 test_pipeline = val_pipeline
 
 train_dataloader = dict(
-    batch_size=1,
+    batch_size=2,
     num_workers=4,
     persistent_workers=True,
     drop_last=True,
@@ -130,9 +143,10 @@ visualizer = dict(
 optim_wrapper = dict(
     type='OptimWrapper',
     optimizer=dict(type='AdamW', lr=2e-4, weight_decay=0.01),
-    paramwise_cfg=dict(custom_keys={
-        'backbone': dict(lr_mult=0.1),
-    }),
+    constructor='CustomLayerDecayOptimizerConstructor',
+    paramwise_cfg=dict(
+        num_layers=33, layer_decay_rate=1.0,
+        depths=[4, 4, 21, 4]),
     clip_grad=dict(max_norm=35, norm_type=2),
 )
 
@@ -235,8 +249,8 @@ model = dict(
     data_preprocessor=dict(
         type='TPVFormerDataPreprocessor',
         pad_size_divisor=32,
-        mean=[103.530, 116.280, 123.675],
-        std=[1.0, 1.0, 1.0],
+        mean=[123.675, 116.28, 103.53],
+        std=[58.395, 57.12, 57.375],
         voxel=True,
         voxel_type='cylindrical',
         voxel_layer=dict(
@@ -257,25 +271,27 @@ model = dict(
                 prob=0.7)
         ]),
     backbone=dict(
-        type='mmdet.ResNet',
-        depth=101,
-        num_stages=4,
+        _delete_=True,
+        type='InternImage',
+        core_op='DCNv3',
+        channels=80,
+        depths=[4, 4, 21, 4],
+        groups=[5, 10, 20, 40],
+        mlp_ratio=4.,
+        drop_path_rate=0.3,
+        norm_layer='LN',
+        layer_scale=1.0,
+        offset_scale=1.0,
+        post_norm=True,
+        with_cp=True,
         out_indices=(1, 2, 3),
-        frozen_stages=1,
-        norm_cfg=dict(type='BN2d', requires_grad=False),
-        norm_eval=True,
-        style='caffe',
-        dcn=dict(
-            type='DCNv2', deform_groups=1, fallback_on_stride=False
-        ),  # original DCNv2 will print log when perform load_state_dict
-        stage_with_dcn=(False, False, True, True),
         init_cfg=dict(
             type='Pretrained',
-            checkpoint='ckpts/tpvformer_pretrained_fcos3d_r101_dcn.pth',
+            checkpoint='ckpts/mask_rcnn_internimage_s_fpn_3x_coco.pth',
             prefix='backbone.')),
     neck=dict(
         type='mmdet.FPN',
-        in_channels=[512, 1024, 2048],
+        in_channels=[160, 320, 640],
         out_channels=_dim_,
         start_level=0,
         add_extra_convs='on_output',
@@ -283,8 +299,10 @@ model = dict(
         relu_before_extra_convs=True,
         init_cfg=dict(
             type='Pretrained',
-            checkpoint='ckpts/tpvformer_pretrained_fcos3d_r101_dcn.pth',
-            prefix='neck.')),
+            checkpoint='ckpts/mask_rcnn_internimage_s_fpn_3x_coco.pth',
+            prefix='neck.'
+        )
+    ),
     encoder=dict(
         type='TPVFormerOccEncoder',
         tpv_h=tpv_h_,
@@ -320,7 +338,7 @@ model = dict(
         scale_z=scale_z,
         ffpe=dict(
             type='TPVFrequencyFeaturePE',
-            use_freq_embed=True,
+            use_freq_embed=False,
             position_dim=3,
             max_freq_log2=10,
             in_dims=_dim_

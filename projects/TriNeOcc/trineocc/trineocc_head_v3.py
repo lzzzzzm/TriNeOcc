@@ -9,8 +9,21 @@ from torch_efficient_distloss import flatten_eff_distloss
 import nerfacc
 
 
+class VarianceNetwork(BaseModule):
+    def __init__(self, init_val):
+        super(VarianceNetwork, self).__init__()
+        self.register_buffer('variance', nn.Parameter(torch.tensor(init_val)))
+
+    @property
+    def inv_s(self):
+        val = torch.exp(self.variance * 10.0)
+        return val
+
+    def forward(self, x):
+        return torch.ones([len(x), 1], device=self.variance.device) * self.inv_s
+
 @MODELS.register_module()
-class TriNeOccHead(BaseModule):
+class TriNeOccHeadV3(BaseModule):
 
     def __init__(self,
                  tpv_h,
@@ -19,10 +32,8 @@ class TriNeOccHead(BaseModule):
                  scene_aabb,
                  near_planes,
                  far_planes,
-                 aug_infer=False,
                  voxel_size=0.4,
                  render_step_size=0.2,
-                 resample_number=96,
                  density_threshold=0.05,
                  num_classes=18,
                  in_dims=64,
@@ -32,11 +43,13 @@ class TriNeOccHead(BaseModule):
                  scale_h=2,
                  scale_w=2,
                  scale_z=2,
+                 supervised_rgb=True,
+                 aug_infer=False,
                  ignore_index=0,
                  distloss_weight=0,
-                 supervised_rgb=True,
+                 s3imloss_weight=1.0,
                  nerf_decoder=None,
-                 pro_nerf_decoder=None,
+                 loss_s3im=None,
                  loss_semantics=None,
                  loss_depth=None):
         super().__init__()
@@ -48,15 +61,15 @@ class TriNeOccHead(BaseModule):
         self.scale_z = scale_z
         self.num_classes = num_classes
         # render params
-        self.aug_infer = aug_infer
         self.position_dim = position_dim
         self.distloss_weight = distloss_weight
+        self.s3imloss_weight = s3imloss_weight
         self.density_threshold = density_threshold
         self.voxel_size = voxel_size
         self.scene_aabb = torch.tensor(scene_aabb, device='cuda')
         self.render_step_size = render_step_size
         self.supervised_rgb = supervised_rgb
-        self.resample_number = resample_number
+        self.aug_infer = aug_infer
 
         self.min_bound = self.scene_aabb[:3]
         self.max_bound = self.scene_aabb[3:]
@@ -66,17 +79,41 @@ class TriNeOccHead(BaseModule):
         out_dims = in_dims if out_dims is None else out_dims
         self.in_dims = in_dims
 
-        if pro_nerf_decoder is not None:
-            self.pro_nerf_decoder = MODELS.build(pro_nerf_decoder)
-        else:
-            self.pro_nerf_decoder = None
+        self.variance = VarianceNetwork(init_val=0.3)
+
         self.nerf_decoder = MODELS.build(nerf_decoder)
+        self.loss_s3im = MODELS.build(loss_s3im)
         self.loss_semantics = MODELS.build(loss_semantics)
         self.loss_depth = MODELS.build(loss_depth)
         self.ignore_index = ignore_index
 
     def forward(self, tpv_list, points=None):
         pass
+
+    def get_alpha(self, sdf, normal, dirs, dists):
+        inv_s = self.variance(torch.zeros([1, 3]))[:, :1].clip(1e-6, 1e6)           # Single parameter
+        inv_s = inv_s.expand(sdf.shape[0], 1)
+
+        true_cos = (dirs * normal).sum(-1, keepdim=True)
+
+        # "cos_anneal_ratio" grows from 0 to 1 in the beginning training iterations. The anneal strategy below makes
+        # the cos value "not dead" at the beginning training iterations, for better convergence.
+        # iter_cos = -(F.relu(-true_cos * 0.5 + 0.5) * (1.0 - self.cos_anneal_ratio) +
+        #              F.relu(-true_cos) * self.cos_anneal_ratio)  # always non-positive
+        iter_cos = -(F.relu(-true_cos * 0.5 + 0.5) + F.relu(-true_cos))  # always non-positive
+
+        # Estimate signed distances at section points
+        estimated_next_sdf = sdf[...,None] + iter_cos * dists.reshape(-1, 1) * 0.5
+        estimated_prev_sdf = sdf[...,None] - iter_cos * dists.reshape(-1, 1) * 0.5
+
+        prev_cdf = torch.sigmoid(estimated_prev_sdf * inv_s)
+        next_cdf = torch.sigmoid(estimated_next_sdf * inv_s)
+
+        p = prev_cdf - next_cdf
+        c = prev_cdf
+
+        alpha = ((p + 1e-5) / (c + 1e-5)).view(-1).clip(0.0, 1.0)
+        return alpha
 
     def query_point_feautres(self,
                              tpv_list,
@@ -98,11 +135,10 @@ class TriNeOccHead(BaseModule):
 
         positions = torch.clamp(positions, self.min_bound, self.max_bound + 1e-6)
         point_coors = positions.clone()
-        point_coors[:, 0] = (point_coors[:, 0] - self.min_bound[0]) / point_coors.new_tensor(voxel_size[0])
-        point_coors[:, 1] = (point_coors[:, 1] - self.min_bound[1]) / point_coors.new_tensor(voxel_size[1])
-        point_coors[:, 2] = (point_coors[:, 2] - self.min_bound[2]) / point_coors.new_tensor(voxel_size[2])
-
-        # normalized to -1~1
+        point_coors[..., 0] = (point_coors[..., 0] - self.min_bound[0]) / point_coors.new_tensor(voxel_size[0])
+        point_coors[..., 1] = (point_coors[..., 1] - self.min_bound[1]) / point_coors.new_tensor(voxel_size[1])
+        point_coors[..., 2] = (point_coors[..., 2] - self.min_bound[2]) / point_coors.new_tensor(voxel_size[2])
+        # normalized to -1~1 to use grid sample in tvp plane
         point_coors = point_coors.reshape(1, 1, -1, 3)
         point_coors[
             ...,
@@ -147,8 +183,10 @@ class TriNeOccHead(BaseModule):
                 voxel_size=[0.4, 0.4, 0.4],
                 positions=ego_points
             )
-            semantics_logits, pred_density = self.nerf_decoder(point_coors, tpv_featurs)
-            seg_pred = semantics_logits.argmax(-1)
+            fused_featurs = self.ffpe(point_coors, tpv_featurs)
+            decoder_featurs = self.decoder(fused_featurs)
+            semantics = self.semantics_mlp(decoder_featurs)
+            seg_pred = semantics.argmax(-1)
             seg_preds.append(seg_pred)
         return seg_preds
 
@@ -212,9 +250,12 @@ class TriNeOccHead(BaseModule):
                         voxel_size=[0.4, 0.4, 0.4],
                         positions=coords[index]
                     )
-                    semantics_logits, pred_density = self.nerf_decoder(point_coors, tpv_featurs)
+                    fused_featurs = self.ffpe(point_coors, tpv_featurs)
+                    decoder_featurs = self.decoder(fused_featurs)
 
-                    pred_semantics = semantics_logits.argmax(-1)
+                    semantics = self.semantics_mlp(decoder_featurs)
+                    density = self.density_mlp(decoder_featurs).reshape(-1)
+                    pred_semantics = semantics.argmax(-1)
                     voting_semantics[index] = pred_semantics
                     voting_density[index] = density
 
@@ -227,100 +268,16 @@ class TriNeOccHead(BaseModule):
                     voxel_size=[0.4, 0.4, 0.4],
                     positions=center_coords
                 )
-                semantics_logits, pred_density = self.nerf_decoder(point_coors, tpv_featurs)
-                pred_semantics = semantics_logits.argmax(-1)
+                fused_featurs = self.ffpe(point_coors, tpv_featurs)
+
+                semantics, pred_density = self.nerf_decoder(fused_featurs)
+                pred_semantics = semantics.argmax(-1)
 
             non_empty_mask = (pred_density > self.density_threshold).reshape(-1)
             occ_pred[non_empty_mask] = pred_semantics[non_empty_mask]
             occ_preds.append(occ_pred)
 
         return occ_preds
-
-    def rendering(self,
-                  ray_indices,
-                  t_starts,
-                  t_ends,
-                  n_rays,
-                  nerf_decoder,
-                  pts,
-                  pts_tpv_features,
-                  input_viewdirs=None,
-                  resample_number=None
-                  ):
-        render_result = {}
-
-        if input_viewdirs is not None:
-            semantics, rgbs, density = nerf_decoder(pts, pts_tpv_features, input_viewdirs=input_viewdirs)
-        else:
-            semantics, density = nerf_decoder(pts, pts_tpv_features)
-
-        weights = nerfacc.render_weight_from_density(
-            t_starts,
-            t_ends,
-            density,
-            ray_indices=ray_indices,
-            n_rays=n_rays,
-        ).to(torch.float64)
-
-        render_semantics = nerfacc.accumulate_along_rays(
-            weights,
-            ray_indices,
-            values=semantics,
-            n_rays=n_rays)
-
-        render_depths = nerfacc.accumulate_along_rays(
-            weights,
-            ray_indices,
-            values=(t_starts + t_ends) / 2.0,
-            n_rays=n_rays,
-        ).transpose(0, 1)
-        render_result['weights'] = weights
-        render_result['render_semantics'] = render_semantics
-        render_result['render_depths'] = render_depths
-
-        if input_viewdirs is not None:
-            render_rgbs = nerfacc.accumulate_along_rays(
-                weights,
-                ray_indices,
-                values=rgbs,
-                n_rays=n_rays
-            )
-            render_result['render_rgbs'] = render_rgbs
-
-        if resample_number is not None:
-            packed_info = nerfacc.pack_info(ray_indices, n_rays=n_rays)
-            packed_info, t_starts, t_ends = nerfacc.ray_resampling(
-                packed_info,
-                t_starts.to(torch.float64),
-                t_ends.to(torch.float64),
-                weights.flatten(),
-                n_samples=resample_number
-            )
-            ray_indices = nerfacc.unpack_info(packed_info, t_starts.shape[0])
-            render_result['ray_indices'] = ray_indices
-            render_result['t_starts'] = t_starts
-            render_result['t_ends'] = t_ends
-
-        return render_result
-
-    def compute_loss(self, render_results):
-        losses = {}
-        losses['loss_semantics'] = self.loss_semantics(render_results['render_semantics'],
-                                                       render_results['gt_semantics'])
-        losses['loss_depth'] = self.loss_depth(render_results['render_depths'], render_results['gt_depths'])
-        # supervised rgb
-        if self.supervised_rgb:
-            losses['loss_rgb'] = F.smooth_l1_loss(render_results['render_rgbs'], render_results['gt_rgbs'])
-
-        # distloss
-        if self.distloss_weight > 0:
-            losses['loss_dist'] = self.distloss_weight * flatten_eff_distloss(
-                render_results['weights'].flatten().to(torch.float32),
-                ((render_results['t_starts'] + render_results['t_ends']) / 2.0).flatten(),
-                (render_results['t_ends'] - render_results['t_starts']).flatten(),
-                render_results['ray_indices'].flatten())
-
-        return losses
 
     def loss(self, tpv_list, batch_rays_bundle, batch_data_samples):
         tpv_hw, tpv_zh, tpv_wz = tpv_list
@@ -333,29 +290,22 @@ class TriNeOccHead(BaseModule):
         for i, data_sample in enumerate(batch_data_samples):
             rays_bundle = batch_rays_bundle[i]
             for cam_num in range(rays_bundle.shape[0]):
-                render_results = dict()
                 # get gt depth and semantics map
-                gt_depths = data_sample.gt_maps['depth_maps'][cam_num].unsqueeze(0)
+                gt_depth = data_sample.gt_maps['depth_maps'][cam_num].unsqueeze(0)
                 gt_semantics = data_sample.gt_maps['semantics_maps'][cam_num].to(torch.int64)
-                render_results['gt_depths'] = gt_depths
-                render_results['gt_semantics'] = gt_semantics
-                # get sampling points (ego coord)
                 origins, directions, viewdirs = rays_bundle[cam_num][:, :3], rays_bundle[cam_num][:, 3:6], rays_bundle[
                                                                                                                cam_num][
-                                                                                                           :, 6:9]
+                                                                                                           :, 6:]
                 if self.supervised_rgb:
-                    gt_rgbs = data_sample.gt_maps['rgb_maps'][cam_num]
-                    render_results['gt_rgbs'] = gt_rgbs
+                    gt_rgb = data_sample.gt_maps['rgb_maps'][cam_num]
 
                 ray_indices, t_starts, t_ends = nerfacc.ray_marching(origins, viewdirs,
                                                                      near_plane=self.near_planes[cam_num],
                                                                      far_plane=self.far_planes[cam_num],
                                                                      render_step_size=self.render_step_size,
                                                                      stratified=True)
-                render_results['ray_indices'] = ray_indices
-                render_results['t_starts'] = t_starts
-                render_results['t_ends'] = t_ends
-                # query point features
+                midpoints = (t_starts + t_ends) / 2.0
+                dists = t_ends - t_starts
                 point_coors, tpv_featurs = self.query_point_feautres(
                     tpv_list=[tpv_hw, tpv_zh, tpv_wz],
                     tpv_scale=[1.0, 1.0, 1.0],
@@ -366,23 +316,68 @@ class TriNeOccHead(BaseModule):
                     t_starts=t_starts,
                     t_ends=t_ends
                 )
-                render_results.update(
-                    self.rendering(
-                        ray_indices,
-                        t_starts,
-                        t_ends,
-                        origins.shape[0],
-                        self.nerf_decoder,
-                        point_coors,
-                        tpv_featurs,
-                        input_viewdirs=(viewdirs[ray_indices] if self.supervised_rgb else None)
-                    )
-                )
-                losses_single = self.compute_loss(render_results)
-                for key in losses_single:
-                    if key in losses and key != 'loss_dist':
-                        losses[key] = losses[key] + losses_single[key]
-                    else:
-                        losses[key] = losses_single[key]
+                # fused_featurs = self.ffpe(point_coors, tpv_featurs)
+                # if self.supervised_rgb:
+                #     input_viewdirs = self.ffpe.view_freq_embed(viewdirs[ray_indices])
+                #     semantics, rgbs, sdf = self.nerf_decoder(fused_featurs, input_viewdirs=input_viewdirs)
+                # else:
+                #     semantics, sdf = self.nerf_decoder(fused_featurs)
 
-        return losses
+                semantics, rgbs, sdf = self.nerf_decoder(point_coors, tpv_featurs, input_viewdirs=viewdirs[ray_indices])
+                points = point_coors.clone()
+                points = points.requires_grad_(True)
+                sdf_grad = torch.autograd.grad(
+                    sdf, points, grad_outputs=torch.ones_like(sdf),
+                    create_graph=True, retain_graph=True, only_inputs=True
+                )[0]
+                normal = F.normalize(sdf_grad, p=2, dim=-1)
+                alpha = self.get_alpha(sdf, normal, viewdirs[ray_indices], dists)[...,None]
+                # rendering
+        #         weights = nerfacc.render_weight_from_density(
+        #             t_starts,
+        #             t_ends,
+        #             density,
+        #             ray_indices=ray_indices,
+        #             n_rays=origins.shape[0],
+        #         ).to(torch.float64)
+        #         render_semantics = nerfacc.accumulate_along_rays(
+        #             weights,
+        #             ray_indices,
+        #             values=semantics,
+        #             n_rays=origins.shape[0])
+        #
+        #         render_depths = nerfacc.accumulate_along_rays(
+        #             weights,
+        #             ray_indices,
+        #             values=distances,
+        #             n_rays=origins.shape[0],
+        #         ).transpose(0, 1)
+        #         loss_semantics = self.loss_semantics(render_semantics, gt_semantics)
+        #         loss_depth = self.loss_depth(render_depths, gt_depth)
+        #         if self.supervised_rgb:
+        #             render_rgbs = nerfacc.accumulate_along_rays(
+        #                 weights,
+        #                 ray_indices,
+        #                 values=rgbs,
+        #                 n_rays=origins.shape[0]
+        #             )
+        #             loss_rgb = F.smooth_l1_loss(render_rgbs, gt_rgb)
+        #             if 'loss_rgb' not in losses:
+        #                 losses['loss_rgb'] = loss_rgb
+        #             else:
+        #                 losses['loss_rgb'] += loss_rgb
+        #
+        #         if 'loss_semantics' not in losses:
+        #             losses['loss_semantics'] = loss_semantics
+        #             losses['loss_depth'] = loss_depth
+        #             if self.distloss_weight > 0:
+        #                 loss_distloss = self.distloss_weight * flatten_eff_distloss(weights.flatten().to(torch.float32),
+        #                                                                             distances.flatten(),
+        #                                                                             self.render_step_size,
+        #                                                                             ray_indices.flatten())
+        #                 losses['loss_distloss'] = loss_distloss
+        #         else:
+        #             losses['loss_semantics'] += loss_semantics
+        #             losses['loss_depth'] += loss_depth
+        #
+        # return losses

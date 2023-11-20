@@ -17,6 +17,17 @@ data_prefix = dict(
 
 backend_args = None
 
+ida_aug_conf = {
+        "resize_lim": (0.8, 1.0),
+        "final_dim": (512, 1408),
+        "bot_pct_lim": (0.0, 0.0),
+        "rot_lim": (0.0, 0.0),
+        "H": 900,
+        "W": 1600,
+        # "rand_flip": False,
+        "rand_flip": False,
+    }
+
 train_pipeline = [
     dict(
         type='BEVOccLoadMultiViewImageFromFiles',
@@ -40,6 +51,7 @@ train_pipeline = [
     dict(
         type='MultiViewWrapper',
         transforms=dict(type='PhotoMetricDistortion3D')),
+    dict(type='ResizeCropFlipImage', data_aug_conf=ida_aug_conf, training=True),
     dict(type='SegLabelMapping'),
     dict(type='LoadDepthsFromPoints',
          depth_min=1.0,
@@ -74,6 +86,7 @@ val_pipeline = [
         with_occ_3d=True,
         with_attr_label=False,
         seg_3d_dtype='np.uint8'),
+    dict(type='ResizeCropFlipImage', data_aug_conf=ida_aug_conf, training=False),
     dict(type='SegLabelMapping'),
     dict(type='LoadDepthsFromPoints',
              depth_min=1.0,

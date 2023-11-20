@@ -16,6 +16,7 @@ from mmdet3d.registry import TRANSFORMS
 
 Number = Union[int, float]
 
+
 @TRANSFORMS.register_module()
 class LoadDepthsFromPoints(BaseTransform):
     """Map original semantic class to valid category ids.
@@ -59,7 +60,7 @@ class LoadDepthsFromPoints(BaseTransform):
         height, width = results['img'][0].shape[:2]
 
         semantics_maps, depth_maps = [], []
-        for l2i in lidar2img:
+        for index, l2i in enumerate(lidar2img):
             # init map
             depth_map = np.zeros((height, width), dtype=np.float32)
             semantics_map = np.full(shape=(height, width), fill_value=255, dtype=np.float32)
@@ -67,7 +68,7 @@ class LoadDepthsFromPoints(BaseTransform):
             # get valid points_img
             points_i = np.matmul(points_lidar, l2i[:3, :3].T) + np.expand_dims(l2i[:3, 3], axis=0)
             points_i = np.concatenate(
-                [points_i[:, :2] / (points_i[:, 2:3]+1e-6), points_i[:, 2:3]],
+                [points_i[:, :2] / (points_i[:, 2:3] + 1e-6), points_i[:, 2:3]],
                 axis=1
             )
             # get depth map
@@ -95,6 +96,7 @@ class LoadDepthsFromPoints(BaseTransform):
         results['semantics_maps'] = semantics_maps
 
         return results
+
 
 @TRANSFORMS.register_module()
 class BEVOccLoadMultiViewImageFromFiles(LoadMultiViewImageFromFiles):
@@ -223,19 +225,38 @@ class BEVOccLoadMultiViewImageFromFiles(LoadMultiViewImageFromFiles):
         results['num_ref_frames'] = self.num_ref_frames
         return results
 
+
 @TRANSFORMS.register_module()
 class LoadRaysFromMultiViewImage(BaseTransform):
 
     def __init__(self,
+                 render,
+                 select_rgb_rays_number,
                  select_rays_number) -> None:
+        self.render = render
         self.select_rays_number = select_rays_number
+        self.select_rgb_rays_number = select_rgb_rays_number
 
-    def get_rays_from_single_image(self, H, W, c2i, c2w, valid_index_x, valid_index_y):
-        sample_index = np.random.randint(0, valid_index_x.shape[0], size=(self.select_rays_number, ))
+    def get_rays_from_single_image(self, c2i, c2w, valid_index_x=None, valid_index_y=None, H=None, W=None,
+                                   render=False):
+        if not render:
+            if H is not None and W is not None:
+                x = torch.randint(0, W, size=(self.select_rgb_rays_number,))
+                y = torch.randint(0, H, size=(self.select_rgb_rays_number,))
+            else:
+                sample_index = np.random.randint(0, valid_index_x.shape[0], size=(self.select_rays_number,))
+                x = torch.tensor(valid_index_x[sample_index])
+                y = torch.tensor(valid_index_y[sample_index])
+        else:
+            x, y = torch.meshgrid(
+                torch.arange(W),
+                torch.arange(H),
+                indexing="xy",
+            )
+            x = x.flatten()
+            y = y.flatten()
+
         c2w = torch.tensor(c2w)
-        x = torch.tensor(valid_index_x[sample_index])
-        y = torch.tensor(valid_index_y[sample_index])
-
         camera_dirs = F.pad(
             torch.stack(
                 [
@@ -247,35 +268,64 @@ class LoadRaysFromMultiViewImage(BaseTransform):
             (0, 1),
             value=1.0,
         )  # [num_rays, 3]
+
         directions = (camera_dirs[:, None, :] * c2w[:3, :3]).sum(dim=-1).to(torch.float32)
         origins = torch.broadcast_to(c2w[:3, 3], directions.shape).to(torch.float32)
+        # normalized directions
         viewdirs = (directions / torch.linalg.norm(
             directions, dim=-1, keepdims=True
         )).to(torch.float32)
 
         return origins, directions, viewdirs, x, y
 
-    def transform(self, results: dict) -> Optional[dict]:
+    def render_transform(self, results: dict) -> Optional[dict]:
         img_height, img_width = results['img'][0].shape[0], results['img'][0].shape[1]
-        rays_bundle, depth_maps, semantic_maps = [], [], []
-        for c2i, c2w, depth_map, semantic_map in zip(results['cam2img'], results['cam2ego'], results['depth_maps'], results['semantics_maps']):
-            valid_index_y, valid_index_x = np.where(semantic_map != 255)
-            origins, directions, viewdirs, x, y = self.get_rays_from_single_image(img_height, img_width, c2i, c2w, valid_index_x, valid_index_y)
+        rays_bundle = []
+        for c2i, c2w in zip(results['cam2img'], results['cam2ego']):
+            origins, directions, viewdirs, x, y = self.get_rays_from_single_image(c2i, c2w, H=img_height, W=img_width,
+                                                                                  render=True)
+            rays = torch.cat([origins, directions, viewdirs], -1)
+            rays_bundle.append(rays)
 
+        rays_bundle = torch.stack(rays_bundle)
+        results['rays_bundle'] = rays_bundle
+        return results
+
+    def train_transform(self, results: dict) -> Optional[dict]:
+        index = 0
+        img_height, img_width = results['img'][0].shape[0], results['img'][0].shape[1]
+        rays_bundle, depth_maps, semantic_maps, rgb_maps = [], [], [], []
+        for c2i, c2w, depth_map, semantic_map in zip(results['cam2img'], results['cam2ego'], results['depth_maps'],
+                                                     results['semantics_maps']):
+            valid_index_y, valid_index_x = np.where(semantic_map != 255)
+            origins, directions, viewdirs, x, y = self.get_rays_from_single_image(c2i, c2w, valid_index_x=valid_index_x,
+                                                                                  valid_index_y=valid_index_y)
             semantic_map = semantic_map[y, x]
             depth_map = depth_map[y, x]
-
-            rays = torch.cat([origins, directions, viewdirs], -1)
-
+            if self.select_rgb_rays_number:
+                img = results['img'][index]
+                rgb_map = img[y, x] / 255.0
+                rgb_maps.append(rgb_map)
             depth_maps.append(depth_map)
             semantic_maps.append(semantic_map)
+            rays = torch.cat([origins, directions, viewdirs, x.unsqueeze(-1), y.unsqueeze(-1)], -1)
             rays_bundle.append(rays)
 
         rays_bundle = torch.stack(rays_bundle)
         depth_maps = np.stack(depth_maps)
         semantic_maps = np.stack(semantic_maps)
+        if self.select_rgb_rays_number:
+            rgb_maps = np.stack(rgb_maps)
+            results['rgb_maps'] = rgb_maps
 
         results['rays_bundle'] = rays_bundle
         results['depth_maps'] = depth_maps
         results['semantics_maps'] = semantic_maps
+        return results
+
+    def transform(self, results: dict) -> Optional[dict]:
+        if not self.render:
+            results = self.train_transform(results)
+        else:
+            results = self.render_transform(results)
         return results

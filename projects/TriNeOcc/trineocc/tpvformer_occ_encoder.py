@@ -312,7 +312,7 @@ class TPVFormerOccEncoder(TransformerLayerSequence):
             0, 2, 1, 3)  # (num_cam, H*W, bs, embed_dims)
 
         reference_points_cams, tpv_masks = [], []
-        ref_3ds = [self.ref_3d_hw, self.ref_3d_zh, self.ref_3d_wz]
+        ref_3ds = [self.ref_3d_hw.repeat(bs, 1, 1, 1), self.ref_3d_zh.repeat(bs, 1, 1, 1), self.ref_3d_wz.repeat(bs, 1, 1, 1)]
         for ref_3d in ref_3ds:
             reference_points_cam, tpv_mask = self.point_sampling(
                 ref_3d, self.pc_range,

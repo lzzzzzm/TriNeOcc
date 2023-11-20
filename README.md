@@ -21,6 +21,12 @@ pip install -v -e .
 ```
 
 **Step 3. Install tiny-cuda-nn and nerfacc.**
+```bash
+pip install torch_efficient_loss
+pip install timm
+```
+
+**Step 3. Install tiny-cuda-nn and nerfacc.**
 
 install ninja
 ```bash

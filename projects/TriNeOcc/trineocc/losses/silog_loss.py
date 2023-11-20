@@ -7,7 +7,7 @@ from torch import Tensor
 
 from mmdet3d.registry import MODELS
 from mmdet.models import weight_reduce_loss
-
+from mmengine.model import BaseModule
 
 def silog_loss(pred: Tensor,
                target: Tensor,
@@ -54,7 +54,7 @@ def silog_loss(pred: Tensor,
 
 
 @MODELS.register_module()
-class SiLogLoss(nn.Module):
+class SiLogLoss(BaseModule):
     """Compute SiLog loss.
 
     Args:

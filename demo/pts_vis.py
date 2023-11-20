@@ -89,34 +89,13 @@ def main():
     sample_number = np.random.randint(0, len(nus_dataset))
     data = nus_dataset.prepare_data(sample_number)
     points = data['inputs']['points']
-    rays_bundle = data['inputs']['rays_bundle']
-    occ_semantics = data['data_samples'].gt_occ_seg.occ_semantics
-    img = data['inputs']['img'][0].permute(1, 2, 0).cpu().numpy()
+    gt_pts_seg = data['data_samples'].gt_pts_seg
+    platte = nus_dataset.METAINFO['palette']
     vis = Det3DLocalVisualizer()
-    device = 'cuda'
-    for index in range(6):
-        scene_aabb = torch.tensor([-40.0, -40.0, -1.0, 40.0, 40.0, 5.4], device=device, dtype=torch.float32)
-        origins, directions, viewdirs = rays_bundle[index][:, :3].cuda(), rays_bundle[index][:, 3:6].cuda(), rays_bundle[index][:, 6:].cuda()
-        # ray_indices, t_starts, t_ends = nerfacc.ray_marching(origins, viewdirs, scene_aabb=scene_aabb, render_step_size=0.2, stratified=True)
-        if index == 0 or index == 3:
-            near_plane = 2.0
-        else:
-            near_plane = 1.0
-        ray_indices, t_starts, t_ends = nerfacc.ray_marching(origins, viewdirs, near_plane=near_plane, far_plane=40.0,
-                                                             render_step_size=0.2, stratified=True)
-        t_mid = (t_starts + t_ends) / 2.0
-        sample_locs = origins[ray_indices] + t_mid * viewdirs[ray_indices]
-        vis.set_points(sample_locs.cpu().numpy(), vis_mode='add', pcd_mode=2)
-    # vis bug
-    # scene_aabb = torch.tensor([-40.0, -40.0, -1.0, 40.0, 40.0, 5.4], device=device, dtype=torch.float32)
-    # origins, directions, viewdirs = rays_bundle[5][:, :3].cuda(), rays_bundle[5][:, 3:6].cuda(), rays_bundle[5][:, 6:].cuda()
-    # ray_indices, t_starts, t_ends = nerfacc.ray_marching(origins, viewdirs, scene_aabb=scene_aabb, render_step_size=0.4,
-    #                                                      stratified=True)
-    # t_mid = (t_starts + t_ends) / 2.0
-    # sample_locs = origins[ray_indices] + t_mid * viewdirs[ray_indices]
-    # vis.set_points(sample_locs.cpu().numpy(), pcd_mode=2)
-    # vis.set_points(points.cpu().numpy(), vis_mode='add')
-    vis._draw_occ_sem_seg(occ_semantics, nus_dataset.METAINFO['palette'])
+    vis._draw_pts_sem_seg(points, gt_pts_seg, platte)
+    vis.o3d_vis.create_window('test')
+    vis._draw_pts_sem_seg(points, gt_pts_seg, platte)
+    # vis._draw_occ_sem_seg(occ_semantics, nus_dataset.METAINFO['palette'])
     vis.show()
 
 

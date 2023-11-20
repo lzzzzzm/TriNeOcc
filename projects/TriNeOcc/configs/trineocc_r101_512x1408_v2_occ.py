@@ -17,6 +17,17 @@ data_prefix = dict(
 
 backend_args = None
 
+ida_aug_conf = {
+        "resize_lim": (0.8, 1.0),
+        "final_dim": (512, 1408),
+        "bot_pct_lim": (0.0, 0.0),
+        "rot_lim": (0.0, 0.0),
+        "H": 900,
+        "W": 1600,
+        # "rand_flip": False,
+        "rand_flip": False,
+    }
+
 train_pipeline = [
     dict(
         type='BEVOccLoadMultiViewImageFromFiles',
@@ -40,16 +51,19 @@ train_pipeline = [
     dict(
         type='MultiViewWrapper',
         transforms=dict(type='PhotoMetricDistortion3D')),
+    dict(type='ResizeCropFlipImage', data_aug_conf=ida_aug_conf, training=True),
     dict(type='SegLabelMapping'),
     dict(type='LoadDepthsFromPoints',
          depth_min=1.0,
-         depth_max=60.0),
+         depth_max=60.0),   # depth_max 45.0
     dict(
         type='LoadRaysFromMultiViewImage',
+        render=False,
+        select_rgb_rays_number=256,
         select_rays_number=512),
     dict(
         type='Pack3DDetInputs',
-        keys=['img', 'points', 'rays_bundle', 'depth_maps', 'semantics_maps'],
+        keys=['img', 'points', 'rays_bundle', 'depth_maps', 'semantics_maps', 'rgb_maps'],
         meta_keys=['lidar2img', 'ego2lidar'])
 ]
 
@@ -74,17 +88,17 @@ val_pipeline = [
         with_occ_3d=True,
         with_attr_label=False,
         seg_3d_dtype='np.uint8'),
+    dict(type='ResizeCropFlipImage', data_aug_conf=ida_aug_conf, training=False),
     dict(type='SegLabelMapping'),
-    dict(type='LoadDepthsFromPoints',
-             depth_min=1.0,
-             depth_max=60.0),
     dict(
         type='LoadRaysFromMultiViewImage',
+        render=True,
+        select_rgb_rays_number=256,
         select_rays_number=512),
     dict(
         type='Pack3DDetInputs',
-        keys=['img', 'points', 'rays_bundle', 'depth_maps', 'semantics_maps', 'occ_semantics', 'occ_mask_camera'],
-        meta_keys=['lidar2img', 'ego2lidar'])
+        keys=['img', 'points', 'rays_bundle', 'occ_semantics', 'occ_mask_camera'],
+        meta_keys=['lidar2img', 'ego2lidar', 'lidar2ego'])
 ]
 
 test_pipeline = val_pipeline
@@ -135,7 +149,6 @@ optim_wrapper = dict(
     }),
     clip_grad=dict(max_norm=35, norm_type=2),
 )
-
 param_scheduler = [
     dict(type='LinearLR', start_factor=1e-5, by_epoch=False, begin=0, end=500),
     dict(
@@ -152,8 +165,13 @@ val_cfg = dict(type='ValLoop')
 test_cfg = dict(type='TestLoop')
 
 default_hooks = dict(checkpoint=dict(type='CheckpointHook', interval=1))
+custom_hooks = [
+    dict(type='CustomHook', render_enable=True)
+]
 
 point_cloud_range = [-40.0, -40.0, -1.0, 40.0, 40.0, 5.4]
+near_planes = [2.0, 1.0, 1.0, 2.0, 1.0, 1.0]
+far_planes = [40.0, 40.0, 40.0, 40.0, 40.0, 40.0]
 _dim_ = 128
 num_heads = 8
 _ffn_dim_ = _dim_ * 2
@@ -311,6 +329,11 @@ model = dict(
         tpv_h=tpv_h_,
         tpv_w=tpv_w_,
         tpv_z=tpv_z_,
+        scene_aabb=point_cloud_range,
+        near_planes=near_planes,
+        far_planes=far_planes,
+        render_step_size=0.4,
+        resample_number=96,
         num_classes=18,
         in_dims=_dim_,
         hidden_dims=2 * _dim_,
@@ -318,13 +341,49 @@ model = dict(
         scale_h=scale_h,
         scale_w=scale_w,
         scale_z=scale_z,
-        ffpe=dict(
-            type='TPVFrequencyFeaturePE',
-            use_freq_embed=True,
-            position_dim=3,
-            max_freq_log2=10,
-            in_dims=_dim_
+        # pro_nerf_decoder=dict(
+        #     type='SemNerfDecoder',
+        #     depth=4,
+        #     rgb_branch=True,
+        #     num_classes=17,
+        #     hidden_dim=2 * _dim_,
+        #     input_ch=_dim_,
+        #     input_ch_viewdirs=27,
+        #     skips=[2],
+        #     ffpe=dict(
+        #         type='TPVFrequencyFeaturePE',
+        #         use_view_freq_embed=True,
+        #         use_pts_freq_embed=True,
+        #         position_dim=3,
+        #         view_max_freq_log2=4,
+        #         pts_max_freq_log2=10,
+        #         in_dims=_dim_
+        #     )
+        # ),
+        nerf_decoder=dict(
+            type='SemNerfDecoder',
+            depth=4,
+            rgb_branch=True,
+            num_classes=17,
+            hidden_dim=2 * _dim_,
+            input_ch=_dim_,
+            input_ch_viewdirs=27,
+            skips=[2],
+            ffpe=dict(
+                type='TPVFrequencyFeaturePE',
+                use_view_freq_embed=True,
+                use_pts_freq_embed=True,
+                position_dim=3,
+                view_max_freq_log2=4,
+                pts_max_freq_log2=10,
+                in_dims=_dim_
+            )
         ),
+        # loss_s3im=dict(
+        #     type='S3IMLoss',
+        #     patch_height=16,
+        #     patch_width=32
+        # ),
         loss_semantics=dict(
             type='mmdet.CrossEntropyLoss',
             use_sigmoid=False,

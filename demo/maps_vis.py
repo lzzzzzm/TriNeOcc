@@ -5,7 +5,7 @@ import numpy as np
 
 from mmdet3d.datasets.transforms.loading import LoadPointsFromFile, LoadAnnotations3D
 from projects.TPVFormer.tpvformer import SegLabelMapping
-from projects.TriNeOcc.trineocc import NuScenesOccDataset, LoadRaysFromMultiViewImage, BEVOccLoadMultiViewImageFromFiles, LoadDepthsFromPoints
+from projects.TriNeOcc.trineocc import NuScenesOccDataset, LoadRaysFromMultiViewImage, BEVOccLoadMultiViewImageFromFiles, LoadDepthsFromPoints, S3IMLoss
 
 
 from mmdet3d.datasets.transforms.formating import Pack3DDetInputs
@@ -13,8 +13,31 @@ from mmdet3d.datasets.transforms.formating import Pack3DDetInputs
 from mmdet3d.visualization import Det3DLocalVisualizer
 
 
+from mmengine.visualization.utils import tensor2ndarray
 import torch
 import torch.nn as nn
+
+
+palette = [
+    [0, 0, 0],  # noise                black
+    [255, 120, 50],  # barrier              orange
+    [255, 192, 203],  # bicycle              pink
+    [255, 255, 0],  # bus                  yellow
+    [0, 150, 245],  # car                  blue
+    [0, 255, 255],  # construction_vehicle cyan
+    [255, 127, 0],  # motorcycle           dark orange
+    [255, 0, 0],  # pedestrian           red
+    [255, 240, 150],  # traffic_cone         light yellow
+    [135, 60, 0],  # trailer              brown
+    [160, 32, 240],  # truck                purple
+    [255, 0, 255],  # driveable_surface    dark pink
+    [139, 137, 137],  # other_flat           dark red
+    [75, 0, 75],  # sidewalk             dard purple
+    [150, 240, 80],  # terrain              light green
+    [230, 230, 250],  # manmade              white
+    [0, 175, 0],  # vegetation           green
+]
+palette = np.array(palette)
 
 def _generate_nus_dataset_config():
     data_root = 'data/nuscenes'
@@ -52,8 +75,8 @@ def _generate_nus_dataset_config():
         dict(
             type=LoadRaysFromMultiViewImage,
             render=False,
-            select_rgb_rays_number=64,
-            select_rays_number=64,
+            select_rgb_rays_number=512,
+            select_rays_number=512,
         ),
         dict(
             type=Pack3DDetInputs,
@@ -88,36 +111,27 @@ def main():
     np.random.seed()
     sample_number = np.random.randint(0, len(nus_dataset))
     data = nus_dataset.prepare_data(sample_number)
-    points = data['inputs']['points']
     rays_bundle = data['inputs']['rays_bundle']
-    occ_semantics = data['data_samples'].gt_occ_seg.occ_semantics
-    img = data['inputs']['img'][0].permute(1, 2, 0).cpu().numpy()
-    vis = Det3DLocalVisualizer()
-    device = 'cuda'
-    for index in range(6):
-        scene_aabb = torch.tensor([-40.0, -40.0, -1.0, 40.0, 40.0, 5.4], device=device, dtype=torch.float32)
-        origins, directions, viewdirs = rays_bundle[index][:, :3].cuda(), rays_bundle[index][:, 3:6].cuda(), rays_bundle[index][:, 6:].cuda()
-        # ray_indices, t_starts, t_ends = nerfacc.ray_marching(origins, viewdirs, scene_aabb=scene_aabb, render_step_size=0.2, stratified=True)
-        if index == 0 or index == 3:
-            near_plane = 2.0
-        else:
-            near_plane = 1.0
-        ray_indices, t_starts, t_ends = nerfacc.ray_marching(origins, viewdirs, near_plane=near_plane, far_plane=40.0,
-                                                             render_step_size=0.2, stratified=True)
-        t_mid = (t_starts + t_ends) / 2.0
-        sample_locs = origins[ray_indices] + t_mid * viewdirs[ray_indices]
-        vis.set_points(sample_locs.cpu().numpy(), vis_mode='add', pcd_mode=2)
-    # vis bug
-    # scene_aabb = torch.tensor([-40.0, -40.0, -1.0, 40.0, 40.0, 5.4], device=device, dtype=torch.float32)
-    # origins, directions, viewdirs = rays_bundle[5][:, :3].cuda(), rays_bundle[5][:, 3:6].cuda(), rays_bundle[5][:, 6:].cuda()
-    # ray_indices, t_starts, t_ends = nerfacc.ray_marching(origins, viewdirs, scene_aabb=scene_aabb, render_step_size=0.4,
-    #                                                      stratified=True)
-    # t_mid = (t_starts + t_ends) / 2.0
-    # sample_locs = origins[ray_indices] + t_mid * viewdirs[ray_indices]
-    # vis.set_points(sample_locs.cpu().numpy(), pcd_mode=2)
-    # vis.set_points(points.cpu().numpy(), vis_mode='add')
-    vis._draw_occ_sem_seg(occ_semantics, nus_dataset.METAINFO['palette'])
-    vis.show()
+    x, y = rays_bundle[..., 9].to(torch.int64), rays_bundle[..., 10].to(torch.int64)
+    semantics_maps = data['data_samples'].gt_maps['semantics_maps'].to(torch.int64)
+    semantics_maps = tensor2ndarray(semantics_maps)
+    H, W = data['inputs']['img'][0].shape[1], data['inputs']['img'][0].shape[2]
+    loss_fn = S3IMLoss(patch_height=H, patch_width=W)
+    for i in range(x.shape[0]):
+        semantics_map = np.zeros(shape=(H, W, 3))
+        x_index = x[i]
+        y_index = y[i]
+        semantics_color = palette[semantics_maps[i]]
+        semantics_map[y_index, x_index] = semantics_color
+        semantics_map = torch.tensor(semantics_map).reshape(H*W, 3)
+        loss = loss_fn(semantics_map, semantics_map+1)
+        print(loss)
+        # cv.imshow('img',  semantics_map)
+        # cv.waitKey()
+
+
+    # vis._draw_occ_sem_seg(occ_semantics, nus_dataset.METAINFO['palette'])
+    # vis.show()
 
 
 if __name__ == '__main__':

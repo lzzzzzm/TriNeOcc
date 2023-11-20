@@ -14,7 +14,7 @@ from mmdet3d.registry import METRICS
 
 @METRICS.register_module()
 class OccMetric(BaseMetric):
-    """3D semantic segmentation evaluation metric.
+    """3D Occupancy segmentation evaluation metric.
 
     Args:
         collect_device (str, optional): Device name used for collecting

@@ -66,7 +66,7 @@ class Pack3DDetInputs(BaseTransform):
     ]
 
     MAPS_KEYS=[
-        'depth_maps', 'semantics_maps'
+        'depth_maps', 'semantics_maps', 'rgb_maps'
     ]
     def __init__(
         self,
@@ -183,7 +183,7 @@ class Pack3DDetInputs(BaseTransform):
                 'gt_bboxes_labels', 'attr_labels', 'pts_instance_mask',
                 'pts_semantic_mask', 'centers_2d', 'depths', 'gt_labels_3d',
                 'occ_semantics', 'occ_mask_lidar', 'occ_mask_camera',
-                'depth_maps', 'semantics_maps'
+                'depth_maps', 'semantics_maps', 'rgb_maps'
         ]:
             if key not in results:
                 continue

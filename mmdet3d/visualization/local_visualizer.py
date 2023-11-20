@@ -831,6 +831,37 @@ class Det3DLocalVisualizer(DetLocalVisualizer):
 
         self.draw_seg_mask(seg_color)
 
+    def _draw_pts_pred_gt_sem_seg(self,
+                                  points,
+                                  pred_pts_seg,
+                                  gt_pts_seg,
+                                  palette,
+                                  keep_index=None
+                                  ):
+        check_type('points', points, (np.ndarray, Tensor))
+
+        points = tensor2ndarray(points)
+        pred_pts_sem_seg = tensor2ndarray(pred_pts_seg.pts_semantic_mask)
+        gt_pts_sem_seg = tensor2ndarray(gt_pts_seg.pts_semantic_mask)
+        palette = np.array(palette)
+
+        if keep_index is not None:
+            keep_index = tensor2ndarray(keep_index)
+            points = points[keep_index]
+            pred_pts_sem_seg = pred_pts_sem_seg[keep_index]
+            gt_pts_sem_seg = gt_pts_sem_seg[keep_index]
+
+        pred_pts_color = palette[pred_pts_sem_seg]
+        gt_pts_color = palette[gt_pts_sem_seg]
+
+        pred_seg_color = np.concatenate([points[:, :3], pred_pts_color], axis=1)
+        gt_seg_color = np.concatenate([points[:, :3], gt_pts_color], axis=1)
+
+        self.draw_seg_mask(pred_seg_color)
+        self.o3d_vis.create_window('gt_windows')
+        self.draw_seg_mask(gt_seg_color)
+
+
     def _draw_occ_sem_seg(self,
                           occ_seg,
                           palette: Optional[List[tuple]] = None,

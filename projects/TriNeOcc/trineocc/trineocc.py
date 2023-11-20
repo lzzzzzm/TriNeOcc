@@ -1,5 +1,7 @@
 from typing import Optional, Union
 
+import mmcv
+import torch
 from torch import nn
 
 from mmdet3d.models import Base3DSegmentor
@@ -15,9 +17,12 @@ class TriNeOcc(Base3DSegmentor):
                  backbone=None,
                  neck=None,
                  encoder=None,
-                 decode_head=None):
+                 decode_head=None,
+                 predict_task='render'):
 
         super().__init__(data_preprocessor=data_preprocessor)
+
+        self.predict_task = predict_task
 
         self.backbone = MODELS.build(backbone)
         if neck is not None:
@@ -41,11 +46,7 @@ class TriNeOcc(Base3DSegmentor):
         return img_feats_reshaped
 
     def _forward(self, batch_inputs, batch_data_samples):
-        """Forward training function."""
-        img_feats = self.extract_feat(batch_inputs['imgs'])
-        outs = self.encoder(img_feats, batch_data_samples)
-        outs = self.decode_head(outs, batch_inputs['voxels']['coors'])
-        return outs
+        pass
 
     def loss(self, batch_inputs: dict,
              batch_data_samples: SampleList) -> SampleList:
@@ -59,18 +60,29 @@ class TriNeOcc(Base3DSegmentor):
         """Forward predict function."""
         img_feats = self.extract_feat(batch_inputs['imgs'])
         tpv_queries = self.encoder(img_feats, batch_data_samples)
-        seg_logits = self.decode_head.predict(tpv_queries, batch_data_samples)
-        seg_preds = [seg_logit.argmax(dim=1) for seg_logit in seg_logits]
-
-        for i in range(len(seg_preds)):
-            seg_logit = seg_logits[i]
-            seg_pred = seg_preds[i]
-            batch_data_samples[i].set_data({
-                'pts_seg_logits':
-                    PointData(**{'pts_seg_logits': seg_logit}),
-                'pred_pts_seg':
-                    PointData(**{'pts_semantic_mask': seg_pred})
-            })
+        if self.predict_task == 'occ':
+            occ_preds = self.decode_head.predict_occ(tpv_queries, batch_data_samples)
+            for i in range(len(occ_preds)):
+                occ_pred = occ_preds[i]
+                batch_data_samples[i].set_data({
+                    'pred_occ_seg':
+                        PointData(**{'pts_semantic_occ': occ_pred})
+                })
+        elif self.predict_task == 'seg':
+            seg_preds = self.decode_head.predict_seg(tpv_queries, batch_inputs['points'], batch_data_samples)
+            for i in range(len(seg_preds)):
+                seg_pred = seg_preds[i]
+                batch_data_samples[i].set_data({
+                    'pred_pts_seg':
+                        PointData(**{'pts_semantic_mask': seg_pred})
+                })
+        elif self.predict_task == 'render':
+            render_maps = self.decode_head.render_img(tpv_queries, batch_inputs['rays_bundle'], batch_data_samples)
+            for i in range(len(batch_data_samples)):
+                batch_data_samples[i].set_data({
+                    'render_maps':render_maps,
+                    'pred_occ_seg':PointData(**{'pts_semantic_occ': [None]})
+                })
 
         return batch_data_samples
 

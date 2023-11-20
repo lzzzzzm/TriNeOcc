@@ -36,22 +36,23 @@ class NuScenesOccDataset(BaseDataset):
               (4, 7), (6, 7), (12, 8), (22, 9), (23, 10), (24, 11), (25, 12),
               (26, 13), (27, 14), (28, 15), (30, 16)]),
         'palette': [
-            # [0,   0,   0, 255],  # 0 undefined
-            [255, 158, 0, 255],  # 1 car  orange
-            [0, 0, 230, 255],  # 2 pedestrian  Blue
-            [47, 79, 79, 255],  # 3 sign  Darkslategrey
-            [220, 20, 60, 255],  # 4 CYCLIST  Crimson
-            [255, 69, 0, 255],  # 5 traiffic_light  Orangered
-            [255, 140, 0, 255],  # 6 pole  Darkorange
-            [233, 150, 70, 255],  # 7 construction_cone  Darksalmon
-            [255, 61, 99, 255],  # 8 bycycle  Red
-            [112, 128, 144, 255],  # 9 motorcycle  Slategrey
-            [222, 184, 135, 255],  # 10 building Burlywood
-            [0, 175, 0, 255],  # 11 vegetation  Green
-            [165, 42, 42, 255],  # 12 trunk  nuTonomy green
-            [0, 207, 191, 255],  # 13 curb, road, lane_marker, other_ground
-            [75, 0, 75, 255],  # 14 walkable, sidewalk
-            [255, 0, 0, 255],  # 15 unobsrvd
+            [0, 0, 0],          # noise                black
+            [255, 120, 50],     # barrier              orange
+            [255, 192, 203],    # bicycle              pink
+            [255, 255, 0],      # bus                  yellow
+            [0, 150, 245],      # car                  blue
+            [0, 255, 255],      # construction_vehicle cyan
+            [255, 127, 0],      # motorcycle           dark orange
+            [255, 0, 0],        # pedestrian           red
+            [255, 240, 150],    # traffic_cone         light yellow
+            [135, 60, 0],       # trailer              brown
+            [160, 32, 240],     # truck                purple
+            [255, 0, 255],      # driveable_surface    dark pink
+            [139, 137, 137],    # other_flat           dark red
+            [75, 0, 75],        # sidewalk             dard purple
+            [150, 240, 80],     # terrain              light green
+            [230, 230, 250],    # manmade              white
+            [0, 175, 0],        # vegetation           green
         ]
     }
 
