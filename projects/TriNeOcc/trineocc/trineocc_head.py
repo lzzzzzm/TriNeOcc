@@ -8,6 +8,7 @@ from mmdet3d.registry import MODELS
 from torch_efficient_distloss import flatten_eff_distloss
 import nerfacc
 
+import nvdiffrast.torch
 
 @MODELS.register_module()
 class TriNeOccHead(BaseModule):
@@ -37,6 +38,7 @@ class TriNeOccHead(BaseModule):
                  supervised_rgb=True,
                  nerf_decoder=None,
                  pro_nerf_decoder=None,
+                 ffpe=None,
                  loss_semantics=None,
                  loss_depth=None):
         super().__init__()
@@ -66,6 +68,7 @@ class TriNeOccHead(BaseModule):
         out_dims = in_dims if out_dims is None else out_dims
         self.in_dims = in_dims
 
+        self.ffpe = MODELS.build(ffpe)
         if pro_nerf_decoder is not None:
             self.pro_nerf_decoder = MODELS.build(pro_nerf_decoder)
         else:
@@ -78,15 +81,25 @@ class TriNeOccHead(BaseModule):
     def forward(self, tpv_list, points=None):
         pass
 
+    @staticmethod
+    def compute_ball_radii(distance, radiis, cos):
+        inverse_cos = 1.0 / cos
+        tmp = (inverse_cos * inverse_cos - 1).sqrt() - radiis
+        sample_ball_radii = distance * radiis * cos / (tmp * tmp + 1.0).sqrt()
+        return sample_ball_radii
+
     def query_point_feautres(self,
                              tpv_list,
                              tpv_scale,
                              voxel_size,
+                             mipmap=False,
                              origins=None,
                              viewdirs=None,
                              ray_indices=None,
                              t_starts=None,
                              t_ends=None,
+                             radiis=None,
+                             cos=None,
                              positions=None):
         tpv_hw, tpv_zh, tpv_wz = tpv_list
 
@@ -102,28 +115,81 @@ class TriNeOccHead(BaseModule):
         point_coors[:, 1] = (point_coors[:, 1] - self.min_bound[1]) / point_coors.new_tensor(voxel_size[1])
         point_coors[:, 2] = (point_coors[:, 2] - self.min_bound[2]) / point_coors.new_tensor(voxel_size[2])
 
-        # normalized to -1~1
-        point_coors = point_coors.reshape(1, 1, -1, 3)
-        point_coors[
-            ...,
-            0] = point_coors[..., 0] / (self.tpv_w * tpv_scale[0]) * 2 - 1
-        point_coors[
-            ...,
-            1] = point_coors[..., 1] / (self.tpv_h * tpv_scale[1]) * 2 - 1
-        point_coors[
-            ...,
-            2] = point_coors[..., 2] / (self.tpv_z * tpv_scale[2]) * 2 - 1
+        if mipmap:
+            radiis = radiis[ray_indices].unsqueeze(-1)
+            cos = cos[ray_indices].unsqueeze(-1)
+            sample_ball_radii = self.compute_ball_radii(distances, radiis, cos)
+            level_vol = torch.log2(
+                sample_ball_radii / 0.01
+            )  # real level should + log2(feature_resolution)
 
-        sample_loc = point_coors[..., [0, 1]]
-        tpv_hw_pts = F.grid_sample(
-            tpv_hw, sample_loc, align_corners=False)
-        sample_loc = point_coors[..., [1, 2]]
-        tpv_zh_pts = F.grid_sample(
-            tpv_zh, sample_loc, align_corners=False)
-        sample_loc = point_coors[..., [2, 0]]
-        tpv_wz_pts = F.grid_sample(
-            tpv_wz, sample_loc, align_corners=False)
-        tpv_featurs = (tpv_hw_pts + tpv_zh_pts + tpv_wz_pts).squeeze(0).squeeze(1).transpose(0, 1)
+            point_coors = point_coors.reshape(1, 1, -1, 3)
+            point_coors[
+                ...,
+                0] = point_coors[..., 0] / (self.tpv_w * tpv_scale[0])
+            point_coors[
+                ...,
+                1] = point_coors[..., 1] / (self.tpv_h * tpv_scale[1])
+            point_coors[
+                ...,
+                2] = point_coors[..., 2] / (self.tpv_z * tpv_scale[2])
+
+            hw_tex = tpv_hw.permute(0, 2, 3, 1)
+            zh_tex = tpv_zh.permute(0, 2, 3, 1)
+            wz_tex = tpv_wz.permute(0, 2, 3, 1)
+            level = torch.full(size=(1, point_coors.shape[2], 1), fill_value=2, device='cuda', dtype=torch.float32)
+
+            hw_x = point_coors[..., [0, 1]].reshape(1, -1, 1, 2) # 1xNx1x2
+            zh_x = point_coors[..., [1, 2]].reshape(1, -1, 1, 2) # 1xNx1x2
+            wz_x = point_coors[..., [2, 0]].reshape(1, -1, 1, 2) # 1xNx1x2
+            hw_enc = nvdiffrast.torch.texture(
+                hw_tex,
+                hw_x,
+                mip_level_bias=level,
+                boundary_mode="clamp",
+                max_mip_level=3,
+            )
+            zh_enc = nvdiffrast.torch.texture(
+                zh_tex,
+                zh_x,
+                mip_level_bias=level,
+                boundary_mode='clamp',
+                max_mip_level=3
+            )
+            wz_enc = nvdiffrast.torch.texture(
+                wz_tex,
+                wz_x,
+                mip_level_bias=level,
+                boundary_mode='clamp',
+                max_mip_level=3
+            )
+            tpv_featurs = (hw_enc + zh_enc + wz_enc).reshape(-1, hw_tex.shape[-1])
+            # normalized to -1~1
+            point_coors = point_coors * 2 - 1
+            return point_coors.squeeze(0).squeeze(0), tpv_featurs
+        else:
+            # normalized to -1~1
+            point_coors = point_coors.reshape(1, 1, -1, 3)
+            point_coors[
+                ...,
+                0] = point_coors[..., 0] / (self.tpv_w * tpv_scale[0]) * 2 - 1
+            point_coors[
+                ...,
+                1] = point_coors[..., 1] / (self.tpv_h * tpv_scale[1]) * 2 - 1
+            point_coors[
+                ...,
+                2] = point_coors[..., 2] / (self.tpv_z * tpv_scale[2]) * 2 - 1
+
+            sample_loc = point_coors[..., [0, 1]]
+            tpv_hw_pts = F.grid_sample(
+                tpv_hw, sample_loc, align_corners=False)
+            sample_loc = point_coors[..., [1, 2]]
+            tpv_zh_pts = F.grid_sample(
+                tpv_zh, sample_loc, align_corners=False)
+            sample_loc = point_coors[..., [2, 0]]
+            tpv_wz_pts = F.grid_sample(
+                tpv_wz, sample_loc, align_corners=False)
+            tpv_featurs = (tpv_hw_pts + tpv_zh_pts + tpv_wz_pts).squeeze(0).squeeze(1).transpose(0, 1)
 
         return point_coors.squeeze(0).squeeze(0), tpv_featurs
 
@@ -216,7 +282,7 @@ class TriNeOccHead(BaseModule):
 
                     pred_semantics = semantics_logits.argmax(-1)
                     voting_semantics[index] = pred_semantics
-                    voting_density[index] = density
+                    voting_density[index] = pred_density
 
                 pred_semantics, indices = torch.mode(voting_semantics, dim=0)
                 pred_density = voting_density.mean(dim=0)
@@ -245,14 +311,15 @@ class TriNeOccHead(BaseModule):
                   pts,
                   pts_tpv_features,
                   input_viewdirs=None,
-                  resample_number=None
+                  resample_number=None,
+                  ffpe=None
                   ):
         render_result = {}
 
         if input_viewdirs is not None:
-            semantics, rgbs, density = nerf_decoder(pts, pts_tpv_features, input_viewdirs=input_viewdirs)
+            semantics, rgbs, density = nerf_decoder(pts, pts_tpv_features, ffpe=ffpe, input_viewdirs=input_viewdirs)
         else:
-            semantics, density = nerf_decoder(pts, pts_tpv_features)
+            semantics, density = nerf_decoder(pts, pts_tpv_features, ffpe=ffpe)
 
         weights = nerfacc.render_weight_from_density(
             t_starts,
@@ -298,8 +365,8 @@ class TriNeOccHead(BaseModule):
             )
             ray_indices = nerfacc.unpack_info(packed_info, t_starts.shape[0])
             render_result['ray_indices'] = ray_indices
-            render_result['t_starts'] = t_starts
-            render_result['t_ends'] = t_ends
+            render_result['t_starts'] = t_starts.to(torch.float32)
+            render_result['t_ends'] = t_ends.to(torch.float32)
 
         return render_result
 
@@ -340,9 +407,11 @@ class TriNeOccHead(BaseModule):
                 render_results['gt_depths'] = gt_depths
                 render_results['gt_semantics'] = gt_semantics
                 # get sampling points (ego coord)
-                origins, directions, viewdirs = rays_bundle[cam_num][:, :3], rays_bundle[cam_num][:, 3:6], rays_bundle[
-                                                                                                               cam_num][
-                                                                                                           :, 6:9]
+                origins, directions, viewdirs, radiis, cos = (rays_bundle[cam_num][:, :3],
+                                                             rays_bundle[cam_num][:, 3:6],
+                                                             rays_bundle[cam_num][:, 6:9],
+                                                             rays_bundle[cam_num][:, -2],
+                                                             rays_bundle[cam_num][:, -1])
                 if self.supervised_rgb:
                     gt_rgbs = data_sample.gt_maps['rgb_maps'][cam_num]
                     render_results['gt_rgbs'] = gt_rgbs
@@ -364,8 +433,64 @@ class TriNeOccHead(BaseModule):
                     viewdirs=viewdirs,
                     ray_indices=ray_indices,
                     t_starts=t_starts,
-                    t_ends=t_ends
+                    t_ends=t_ends,
+                    radiis=radiis,
+                    cos=cos
                 )
+                # proposal
+                if self.pro_nerf_decoder:
+                    pro_render_result = dict()
+                    pro_render_result['gt_depths'] = gt_depths
+                    pro_render_result['gt_semantics'] = gt_semantics
+                    if self.supervised_rgb:
+                        pro_render_result['gt_rgbs'] = gt_rgbs
+
+                    pro_render_result.update(
+                        self.rendering(
+                            ray_indices,
+                            t_starts,
+                            t_ends,
+                            origins.shape[0],
+                            self.pro_nerf_decoder,
+                            point_coors,
+                            tpv_featurs,
+                            input_viewdirs=(viewdirs[ray_indices] if self.supervised_rgb else None),
+                            resample_number=self.resample_number,
+                            ffpe=self.ffpe
+                        )
+                    )
+                    # combine the coarse and fine points
+                    ray_indices = torch.cat([ray_indices, pro_render_result['ray_indices']])
+                    t_starts = torch.cat([t_starts, pro_render_result['t_starts']])
+                    t_ends = torch.cat([t_ends, pro_render_result['t_ends']])
+                    # the same ray_indices sort by distances
+                    t_starts = torch.cat([torch.sort(t_starts[ray_indices==index])[0].squeeze(-1) for index in
+                                          range(origins.shape[0])]).unsqueeze(-1)
+                    t_ends = torch.cat([torch.sort(t_ends[ray_indices == index])[0].squeeze(-1) for index in
+                                          range(origins.shape[0])]).unsqueeze(-1)
+                    # generate new ray_indices
+                    ray_len = [len(t_starts[ray_indices==index]) for index in range(origins.shape[0])]
+                    ray_indices = torch.cat([torch.full(size=(ray_len[index], ), fill_value=index) for index in range(origins.shape[0])])
+                    # query point features
+                    point_coors, tpv_featurs = self.query_point_feautres(
+                        tpv_list=[tpv_hw, tpv_zh, tpv_wz],
+                        tpv_scale=[1.0, 1.0, 1.0],
+                        voxel_size=[0.4, 0.4, 0.4],
+                        origins=origins,
+                        viewdirs=viewdirs,
+                        ray_indices=ray_indices,
+                        t_starts=t_starts,
+                        t_ends=t_ends,
+                    )
+                    losses_pro_single = self.compute_loss(pro_render_result)
+                    for key in losses_pro_single:
+                        if key in losses and key != 'pro_loss_dist':
+                            in_key = 'pro_'+key
+                            losses[in_key] = losses[in_key] + losses_single[key]
+                        else:
+                            in_key = 'pro_' + key
+                            losses[in_key] = losses_single[key]
+
                 render_results.update(
                     self.rendering(
                         ray_indices,
@@ -375,7 +500,8 @@ class TriNeOccHead(BaseModule):
                         self.nerf_decoder,
                         point_coors,
                         tpv_featurs,
-                        input_viewdirs=(viewdirs[ray_indices] if self.supervised_rgb else None)
+                        input_viewdirs=(viewdirs[ray_indices] if self.supervised_rgb else None),
+                        ffpe=self.ffpe
                     )
                 )
                 losses_single = self.compute_loss(render_results)
